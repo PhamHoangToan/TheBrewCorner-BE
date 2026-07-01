@@ -64,13 +64,19 @@ export class ReservationsService {
     return { items, total: items.length }
   }
 
-  async confirm(id: string) {
+  async confirm(id: string, tableId?: string) {
     const reservation = await this.prisma.reservation.findUnique({ where: { id } })
     if (!reservation) throw new NotFoundException('Không tìm thấy yêu cầu đặt bàn')
 
+    if (tableId) {
+      const table = await this.prisma.cafeTable.findUnique({ where: { id: tableId } })
+      if (!table) throw new BadRequestException('Bàn không tồn tại')
+      if (table.status !== 'AVAILABLE') throw new BadRequestException('Bàn đã được chọn không còn trống')
+    }
+
     const updated = await this.prisma.reservation.update({
       where: { id },
-      data: { status: 'CONFIRMED' },
+      data: { status: 'CONFIRMED', tableId: tableId ?? reservation.tableId },
       include: { table: true },
     })
 

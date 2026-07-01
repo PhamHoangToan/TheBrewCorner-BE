@@ -195,7 +195,7 @@ export class IngredientsService {
       }
 
       return tx.stockImport.findUnique({ where: { id: doc.id }, include: { items: true } })
-    })
+    }, { timeout: 15000, maxWait: 10000 })
   }
 
   async stockExports(query: QueryParams) {
@@ -244,7 +244,7 @@ export class IngredientsService {
       }
 
       return tx.stockExport.findUnique({ where: { id: doc.id }, include: { items: true } })
-    })
+    }, { timeout: 15000, maxWait: 10000 })
 
     // Kiểm tra ngay các nguyên liệu vừa xuất có sắp hết không
     const exportedIds = items

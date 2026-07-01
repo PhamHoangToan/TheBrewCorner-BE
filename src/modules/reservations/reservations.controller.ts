@@ -21,8 +21,8 @@ export class ReservationsController {
   }
 
   @Patch(':id/confirm')
-  confirm(@Param('id') id: string) {
-    return this.reservationsService.confirm(id)
+  confirm(@Param('id') id: string, @Body() body: { tableId?: string }) {
+    return this.reservationsService.confirm(id, body?.tableId)
   }
 
   @Patch(':id/cancel')

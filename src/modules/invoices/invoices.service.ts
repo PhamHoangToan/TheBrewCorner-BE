@@ -102,47 +102,45 @@ export class InvoicesService {
       if (existing) return existing
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      const payment = await tx.invoicePayment.create({
-        data: {
-          invoiceId: id,
-          method: this.method(body.method),
-          amount: body.amount ?? invoice.totalAmount,
-          note: body.note ?? null,
-        },
-      })
-      await tx.invoice.update({ where: { id }, data: { status: 'PAID', paidAt: new Date() } })
-      await tx.order.update({ where: { id: invoice.orderId }, data: { status: 'PAID' } })
-
-      if (invoice.order.tableId) {
-        await tx.cafeTable.update({
-          where: { id: invoice.order.tableId },
-          data: { status: 'SERVING' },
-        })
-      }
-
-      this.notifications.emitOrderUpdate(invoice.orderId, { status: 'PAID' })
+    const result = await this.prisma.$transaction(async (tx) => {
+      const [payment] = await Promise.all([
+        tx.invoicePayment.create({
+          data: {
+            invoiceId: id,
+            method: this.method(body.method),
+            amount: body.amount ?? invoice.totalAmount,
+            note: body.note ?? null,
+          },
+        }),
+        tx.invoice.update({ where: { id }, data: { status: 'PAID', paidAt: new Date() } }),
+        tx.order.update({ where: { id: invoice.orderId }, data: { status: 'PAID' } }),
+        ...(invoice.order.tableId
+          ? [tx.cafeTable.update({ where: { id: invoice.order.tableId }, data: { status: 'SERVING' } })]
+          : []),
+      ])
 
       if (invoice.order.customerId) {
         const amount = parseFloat(String(invoice.totalAmount))
         const earnedPoints = Math.floor(amount * POINTS_PER_VND)
         if (earnedPoints > 0) {
-          await tx.loyaltyTransaction.create({
-            data: {
-              userId: invoice.order.customerId,
-              orderId: invoice.orderId,
-              points: earnedPoints,
-              type: 'EARN',
-              description: `Tích điểm hóa đơn ${invoice.code}`,
-            },
-          })
-          const user = await tx.user.update({
-            where: { id: invoice.order.customerId },
-            data: {
-              loyaltyPoints: { increment: earnedPoints },
-              totalSpent: { increment: amount },
-            },
-          })
+          const [, user] = await Promise.all([
+            tx.loyaltyTransaction.create({
+              data: {
+                userId: invoice.order.customerId,
+                orderId: invoice.orderId,
+                points: earnedPoints,
+                type: 'EARN',
+                description: `Tích điểm hóa đơn ${invoice.code}`,
+              },
+            }),
+            tx.user.update({
+              where: { id: invoice.order.customerId },
+              data: {
+                loyaltyPoints: { increment: earnedPoints },
+                totalSpent: { increment: amount },
+              },
+            }),
+          ])
           const tier = this.tierFor(parseFloat(String(user.totalSpent)))
           if (tier !== user.membershipTier) {
             await tx.user.update({ where: { id: user.id }, data: { membershipTier: tier } })
@@ -151,7 +149,12 @@ export class InvoicesService {
       }
 
       return payment
-    })
+    }, { timeout: 15000, maxWait: 10000 })
+
+    // Emit realtime ngoài transaction — chỉ là side-effect socket, không cần rollback nếu lỗi
+    this.notifications.emitOrderUpdate(invoice.orderId, { status: 'PAID' })
+
+    return result
   }
 
   private tierFor(totalSpent: number): MembershipTier {

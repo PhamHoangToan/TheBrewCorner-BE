@@ -150,26 +150,58 @@ describe('ReservationsService', () => {
       await expect(service.confirm('missing')).rejects.toThrow(NotFoundException)
     })
 
-    it('set status CONFIRMED và set bàn RESERVED nếu có tableId', async () => {
+    it('set status CONFIRMED và set bàn RESERVED nếu reservation đã có tableId sẵn', async () => {
       prisma.reservation.findUnique.mockResolvedValue(makeReservation({ tableId: 'table-1' }))
       prisma.reservation.update.mockResolvedValue(makeReservation({ tableId: 'table-1', status: 'CONFIRMED' }))
 
       await service.confirm('res-1')
 
-      expect(prisma.reservation.update).toHaveBeenCalledWith(expect.objectContaining({
+      expect(prisma.reservation.update).toHaveBeenCalledWith({
         where: { id: 'res-1' },
-        data: { status: 'CONFIRMED' },
-      }))
+        data: { status: 'CONFIRMED', tableId: 'table-1' },
+        include: { table: true },
+      })
       expect(prisma.cafeTable.update).toHaveBeenCalledWith({ where: { id: 'table-1' }, data: { status: 'RESERVED' } })
     })
 
-    it('không đụng bàn nếu reservation không có tableId', async () => {
+    it('không đụng bàn nếu reservation không có tableId và không chọn bàn khi confirm', async () => {
       prisma.reservation.findUnique.mockResolvedValue(makeReservation({ tableId: null }))
       prisma.reservation.update.mockResolvedValue(makeReservation({ tableId: null, status: 'CONFIRMED' }))
 
       await service.confirm('res-1')
 
       expect(prisma.cafeTable.update).not.toHaveBeenCalled()
+    })
+
+    it('gán bàn được chọn (tableId truyền vào) khi confirm, nếu bàn đang AVAILABLE', async () => {
+      prisma.reservation.findUnique.mockResolvedValue(makeReservation({ tableId: null }))
+      prisma.cafeTable.findUnique.mockResolvedValue({ id: 'table-2', status: 'AVAILABLE' })
+      prisma.reservation.update.mockResolvedValue(makeReservation({ tableId: 'table-2', status: 'CONFIRMED' }))
+
+      await service.confirm('res-1', 'table-2')
+
+      expect(prisma.reservation.update).toHaveBeenCalledWith({
+        where: { id: 'res-1' },
+        data: { status: 'CONFIRMED', tableId: 'table-2' },
+        include: { table: true },
+      })
+      expect(prisma.cafeTable.update).toHaveBeenCalledWith({ where: { id: 'table-2' }, data: { status: 'RESERVED' } })
+    })
+
+    it('báo lỗi BadRequestException nếu bàn được chọn không tồn tại', async () => {
+      prisma.reservation.findUnique.mockResolvedValue(makeReservation({ tableId: null }))
+      prisma.cafeTable.findUnique.mockResolvedValue(null)
+
+      await expect(service.confirm('res-1', 'table-missing')).rejects.toThrow(BadRequestException)
+      expect(prisma.reservation.update).not.toHaveBeenCalled()
+    })
+
+    it('báo lỗi BadRequestException nếu bàn được chọn không còn AVAILABLE', async () => {
+      prisma.reservation.findUnique.mockResolvedValue(makeReservation({ tableId: null }))
+      prisma.cafeTable.findUnique.mockResolvedValue({ id: 'table-2', status: 'SERVING' })
+
+      await expect(service.confirm('res-1', 'table-2')).rejects.toThrow(BadRequestException)
+      expect(prisma.reservation.update).not.toHaveBeenCalled()
     })
   })
 
