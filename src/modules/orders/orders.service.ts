@@ -4,6 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service'
 import { pagination, QueryParams } from '../../common/crud.types'
 import { NotificationsService, NotifRole } from '../notifications/notifications.service'
 import { LowStockJob } from '../jobs/low-stock.job'
+import { InvoicesService } from '../invoices/invoices.service'
 
 @Injectable()
 export class OrdersService {
@@ -11,6 +12,7 @@ export class OrdersService {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
     private readonly lowStockJob: LowStockJob,
+    private readonly invoicesService: InvoicesService,
   ) {}
 
   async findAll(query: QueryParams) {
@@ -107,6 +109,11 @@ export class OrdersService {
       await this.prisma.cafeTable.update({ where: { id: tableId }, data: { status: 'SERVING' } })
     }
 
+    if (body.pendingTransferCode) {
+      const paid = await this.payFromPendingTransfer(order.id, order.totalAmount, String(body.pendingTransferCode))
+      if (paid) order.status = 'PAID' as OrderStatus
+    }
+
     const tableLabel = order.table ? `Bàn ${order.table.name}` : 'Mang về'
 
     // Barista và cashier luôn nhận thông báo order mới
@@ -124,6 +131,32 @@ export class OrdersService {
     })
 
     return order
+  }
+
+  // Customer app chọn "chuyển khoản" trước khi tạo order (mã tham chiếu PendingTransfer đã
+  // được Casso xác nhận PAID lúc chờ ở màn checkout). Tạo thẳng invoice đã thanh toán, không
+  // để order rơi vào trạng thái chờ thanh toán thủ công.
+  private async payFromPendingTransfer(orderId: string, totalAmount: unknown, code: string): Promise<boolean> {
+    const pending = await this.prisma.pendingTransfer.findUnique({ where: { code } })
+    if (!pending || pending.status !== 'PAID') return false
+
+    const amount = parseFloat(String(totalAmount ?? pending.amount))
+    const invoice = await this.invoicesService.create({
+      orderId,
+      subtotal: amount,
+      discountAmount: 0,
+      totalAmount: amount,
+    })
+    await this.invoicesService.pay(invoice.id, {
+      method: 'BANK_TRANSFER',
+      amount: parseFloat(String(pending.amount)),
+      note: pending.tid ? `Casso: ${pending.tid}` : 'Xác nhận chuyển khoản trước khi tạo đơn',
+    })
+    await this.prisma.pendingTransfer.update({
+      where: { code },
+      data: { status: 'CONSUMED', orderId },
+    })
+    return true
   }
 
   async update(id: string, body: Record<string, any>) {

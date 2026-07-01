@@ -26,6 +26,7 @@ import { PayrollModule } from './modules/payroll/payroll.module'
 import { LeaveRequestsModule } from './modules/leave-requests/leave-requests.module'
 import { DashboardModule } from './modules/dashboard/dashboard.module'
 import { WebhooksModule } from './modules/webhooks/webhooks.module'
+import { PendingTransfersModule } from './modules/pending-transfers/pending-transfers.module'
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { WebhooksModule } from './modules/webhooks/webhooks.module'
     IngredientsModule,
     InvoicesModule,
     OrdersModule,
+    PendingTransfersModule,
     ProductsModule,
     PromotionsModule,
     ReportsModule,

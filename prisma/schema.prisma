@@ -116,34 +116,34 @@ enum LeaveType {
 }
 
 model User {
-  id                 String               @id @default(cuid()) @db.VarChar(36)
-  code               String               @unique @db.VarChar(32)
-  name               String               @db.VarChar(120)
-  email              String?              @unique @db.VarChar(191)
-  phone              String?              @db.VarChar(20)
-  address            String?              @db.VarChar(255)
-  avatarUrl          String?              @db.VarChar(500)
-  shiftName          String?              @db.VarChar(80)
-  passwordHash       String               @db.VarChar(255)
-  mustChangePassword Boolean              @default(false)
-  role               UserRole
-  status             StaffStatus          @default(ACTIVE)
-  employmentType     EmploymentType       @default(FULL_TIME)
-  baseSalary         Decimal              @default(0) @db.Decimal(12, 2)
-  otRatePerHour      Decimal              @default(0) @db.Decimal(10, 2)
-  paidLeaveDaysLeft  Int                  @default(12)
-  createdAt          DateTime             @default(now())
-  updatedAt          DateTime             @updatedAt
-  orders             Order[]              @relation("OrderCreatedBy")
-  customerOrders     Order[]              @relation("OrderCustomer")
-  invoices           Invoice[]            @relation("InvoiceCashier")
-  financeEntries     FinanceTransaction[] @relation("FinanceCreatedBy")
-  stockImports       StockImport[]        @relation("StockImportCreatedBy")
-  stockExports       StockExport[]        @relation("StockExportCreatedBy")
-  shiftAssignments   ShiftAssignment[]
-  attendanceLogs     AttendanceLog[]
-  payrolls           Payroll[]
-  leaveRequests      LeaveRequest[]
+  id                    String                        @id @default(cuid()) @db.VarChar(36)
+  code                  String                        @unique @db.VarChar(32)
+  name                  String                        @db.VarChar(120)
+  email                 String?                       @unique @db.VarChar(191)
+  phone                 String?                       @db.VarChar(20)
+  address               String?                       @db.VarChar(255)
+  avatarUrl             String?                       @db.VarChar(500)
+  shiftName             String?                       @db.VarChar(80)
+  passwordHash          String                        @db.VarChar(255)
+  mustChangePassword    Boolean                       @default(false)
+  role                  UserRole
+  status                StaffStatus                   @default(ACTIVE)
+  employmentType        EmploymentType                @default(FULL_TIME)
+  baseSalary            Decimal                       @default(0) @db.Decimal(12, 2)
+  otRatePerHour         Decimal                       @default(0) @db.Decimal(10, 2)
+  paidLeaveDaysLeft     Int                           @default(12)
+  createdAt             DateTime                      @default(now())
+  updatedAt             DateTime                      @updatedAt
+  orders                Order[]                       @relation("OrderCreatedBy")
+  customerOrders        Order[]                       @relation("OrderCustomer")
+  invoices              Invoice[]                     @relation("InvoiceCashier")
+  financeEntries        FinanceTransaction[]          @relation("FinanceCreatedBy")
+  stockImports          StockImport[]                 @relation("StockImportCreatedBy")
+  stockExports          StockExport[]                 @relation("StockExportCreatedBy")
+  shiftAssignments      ShiftAssignment[]
+  attendanceLogs        AttendanceLog[]
+  payrolls              Payroll[]
+  leaveRequests         LeaveRequest[]
   attendanceCorrections AttendanceCorrectionRequest[]
 
   @@map("users")
@@ -205,8 +205,8 @@ model ShiftAssignment {
   status    ShiftStatus @default(SCHEDULED)
   note      String?     @db.VarChar(255)
   createdAt DateTime    @default(now())
-  shift     Shift    @relation(fields: [shiftId], references: [id])
-  user      User     @relation(fields: [userId], references: [id])
+  shift     Shift       @relation(fields: [shiftId], references: [id])
+  user      User        @relation(fields: [userId], references: [id])
 
   @@unique([userId, shiftId, workDate])
   @@map("shift_assignments")
@@ -436,15 +436,34 @@ model InvoicePayment {
   @@map("invoice_payments")
 }
 
+enum PendingTransferStatus {
+  WAITING
+  PAID
+  CONSUMED
+}
+
+model PendingTransfer {
+  id        String                @id @default(cuid()) @db.VarChar(36)
+  code      String                @unique @db.VarChar(32)
+  amount    Decimal               @db.Decimal(12, 2)
+  status    PendingTransferStatus @default(WAITING)
+  tid       String?               @db.VarChar(64)
+  orderId   String?               @db.VarChar(36)
+  paidAt    DateTime?
+  createdAt DateTime              @default(now())
+
+  @@map("pending_transfers")
+}
+
 model Ingredient {
-  id             String            @id @default(cuid()) @db.VarChar(36)
-  code           String            @unique @db.VarChar(32)
-  name           String            @db.VarChar(160)
-  unit           String            @db.VarChar(32)
-  usagePerUnit   Decimal           @default(1) @db.Decimal(12, 4)
-  stockQuantity  Decimal           @default(0) @db.Decimal(10, 2)
-  minQuantity    Decimal           @default(0) @db.Decimal(10, 2)
-  isActive       Boolean           @default(true)
+  id            String            @id @default(cuid()) @db.VarChar(36)
+  code          String            @unique @db.VarChar(32)
+  name          String            @db.VarChar(160)
+  unit          String            @db.VarChar(32)
+  usagePerUnit  Decimal           @default(1) @db.Decimal(12, 4)
+  stockQuantity Decimal           @default(0) @db.Decimal(10, 2)
+  minQuantity   Decimal           @default(0) @db.Decimal(10, 2)
+  isActive      Boolean           @default(true)
   recipes       ProductRecipe[]
   importItems   StockImportItem[]
   exportItems   StockExportItem[]
@@ -641,4 +660,3 @@ model ActivityLog {
   @@index([createdAt])
   @@map("activity_logs")
 }
-

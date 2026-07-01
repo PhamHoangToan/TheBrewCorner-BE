@@ -59,26 +59,29 @@ export class CassoService {
       return false
     }
 
-    const orderCode = match[1].trim()
+    const code = match[1].trim()
     const order = await this.prisma.order.findFirst({
-      where: { code: orderCode },
+      where: { code },
       include: { invoice: true },
     })
 
-    if (!order) {
-      this.logger.warn(`Order not found: ${orderCode}`)
-      return false
-    }
+    if (order) return this.payOrder(order, tx)
+    return this.payPendingTransfer(code, tx)
+  }
 
+  private async payOrder(
+    order: { id: string; code: string; totalAmount: unknown; invoice: { status: string } | null },
+    tx: CassoTransaction,
+  ): Promise<boolean> {
     if (order.invoice?.status === 'PAID') {
-      this.logger.log(`Order ${orderCode} already paid`)
+      this.logger.log(`Order ${order.code} already paid`)
       return false
     }
 
     const expected = parseFloat(String(order.totalAmount ?? 0))
     if (expected > 0 && tx.amount < expected) {
       this.logger.warn(
-        `Order ${orderCode}: số tiền chuyển khoản (${tx.amount}) thấp hơn tổng hóa đơn (${expected}) — không tự động thanh toán, cần cashier kiểm tra thủ công`,
+        `Order ${order.code}: số tiền chuyển khoản (${tx.amount}) thấp hơn tổng hóa đơn (${expected}) — không tự động thanh toán, cần cashier kiểm tra thủ công`,
       )
       return false
     }
@@ -96,7 +99,39 @@ export class CassoService {
       note: `Casso: ${tx.tid}`,
     })
 
-    this.logger.log(`Auto-paid order ${orderCode} — ${tx.amount} VND (tid: ${tx.tid})`)
+    this.logger.log(`Auto-paid order ${order.code} — ${tx.amount} VND (tid: ${tx.tid})`)
+    return true
+  }
+
+  // Khách hàng bên Customer app chọn "chuyển khoản" trước khi đơn hàng được tạo — chưa có
+  // order.code để match. Casso description dùng mã tham chiếu tạm (PendingTransfer.code) thay thế;
+  // FE poll trạng thái này rồi mới cho tạo order kèm invoice đã PAID.
+  private async payPendingTransfer(code: string, tx: CassoTransaction): Promise<boolean> {
+    const pending = await this.prisma.pendingTransfer.findUnique({ where: { code } })
+    if (!pending) {
+      this.logger.warn(`Không tìm thấy order hoặc mã tham chiếu: ${code}`)
+      return false
+    }
+
+    if (pending.status !== 'WAITING') {
+      this.logger.log(`Pending transfer ${code} đã ở trạng thái ${pending.status}`)
+      return false
+    }
+
+    const expected = parseFloat(String(pending.amount))
+    if (tx.amount < expected) {
+      this.logger.warn(
+        `Pending transfer ${code}: số tiền chuyển khoản (${tx.amount}) thấp hơn dự kiến (${expected})`,
+      )
+      return false
+    }
+
+    await this.prisma.pendingTransfer.update({
+      where: { code },
+      data: { status: 'PAID', paidAt: new Date(), tid: tx.tid },
+    })
+
+    this.logger.log(`Pending transfer ${code} đã xác nhận thanh toán — ${tx.amount} VND (tid: ${tx.tid})`)
     return true
   }
 }

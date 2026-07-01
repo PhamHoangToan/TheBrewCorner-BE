@@ -3,9 +3,10 @@ import { OrdersController } from './orders.controller'
 import { OrdersService } from './orders.service'
 import { NotificationsModule } from '../notifications/notifications.module'
 import { JobsModule } from '../jobs/jobs.module'
+import { InvoicesModule } from '../invoices/invoices.module'
 
 @Module({
-  imports: [NotificationsModule, JobsModule],
+  imports: [NotificationsModule, JobsModule, InvoicesModule],
   controllers: [OrdersController],
   providers: [OrdersService],
   exports: [OrdersService],
