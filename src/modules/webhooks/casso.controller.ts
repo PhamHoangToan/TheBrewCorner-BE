@@ -13,7 +13,7 @@ export class CassoController {
   @HttpCode(200)
   async handle(
     @Body() body: any,
-    @Headers('x-api-key') apiKey?: string,
+    @Headers('secure-token') apiKey?: string,
   ) {
     const secret = this.configService.get<string>('CASSO_API_KEY')
     if (!secret || apiKey !== secret) {
