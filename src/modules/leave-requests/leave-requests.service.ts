@@ -1,6 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../prisma/prisma.service'
 import { pagination, QueryParams } from '../../common/crud.types'
+import { mentionsPaidLeave } from '../../common/leave-note.util'
+import { datesInRange } from '../../common/date.util'
 
 @Injectable()
 export class LeaveRequestsService {
@@ -41,10 +43,10 @@ export class LeaveRequestsService {
     if (!request) throw new NotFoundException('Không tìm thấy đơn nghỉ phép')
     if (request.status !== 'PENDING') throw new BadRequestException('Đơn đã được xử lý')
 
-    const dates = this.datesInRange(request.startDate, request.endDate)
+    const dates = datesInRange(request.startDate, request.endDate)
 
     if (request.type !== 'UNPAID') {
-      // Đánh dấu các ShiftAssignment trong khoảng ngày để payroll tự nhận diện qua usesPaidLeave().
+      // Đánh dấu các ShiftAssignment trong khoảng ngày để payroll tự nhận diện qua mentionsPaidLeave().
       // Note ghi rõ loại nghỉ (phép năm/ốm) để Shift/Attendance bên admin và mobile hiển thị đúng.
       const leaveLabel = this.leaveTypeLabel(request.type)
       for (const workDate of dates) {
@@ -52,7 +54,7 @@ export class LeaveRequestsService {
           where: { userId: request.userId, workDate },
         })
         if (assignment) {
-          const note = this.mentionsLeave(assignment.note)
+          const note = mentionsPaidLeave(assignment.note)
             ? assignment.note
             : assignment.note
               ? `${assignment.note} · ${leaveLabel}`
@@ -89,27 +91,8 @@ export class LeaveRequestsService {
     })
   }
 
-  private mentionsLeave(note?: string | null): boolean {
-    const normalized = String(note ?? '')
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[̀-ͯ]/g, '')
-    return normalized.includes('phep')
-  }
-
   private leaveTypeLabel(type: string): string {
     if (type === 'SICK') return 'Nghỉ phép (ốm)'
     return 'Nghỉ phép năm'
-  }
-
-  private datesInRange(start: Date, end: Date): Date[] {
-    const dates: Date[] = []
-    const cur = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()))
-    const last = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate()))
-    while (cur <= last) {
-      dates.push(new Date(cur))
-      cur.setUTCDate(cur.getUTCDate() + 1)
-    }
-    return dates
   }
 }

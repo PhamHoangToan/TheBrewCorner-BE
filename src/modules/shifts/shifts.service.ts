@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common'
 import { PrismaService } from '../../prisma/prisma.service'
 import { pagination, QueryParams } from '../../common/crud.types'
 import { AttendanceService } from '../attendance/attendance.service'
+import { mentionsPaidLeave } from '../../common/leave-note.util'
+import { isFutureDate } from '../../common/date.util'
 
 @Injectable()
 export class ShiftsService {
@@ -112,7 +114,7 @@ export class ShiftsService {
     const shift = await this.prisma.shift.findUniqueOrThrow({ where: { id: shiftId } })
     const workDate = new Date(body.workDate ?? body.ngay ?? new Date())
     const isLeave = this.isLeaveOrAbsent(body)
-    const isFuture = this.isFutureDate(workDate)
+    const isFuture = isFutureDate(workDate)
 
     const status = isFuture ? 'SCHEDULED' : isLeave ? 'ABSENT' : 'COMPLETED'
 
@@ -142,20 +144,9 @@ export class ShiftsService {
     return assignment
   }
 
-  private isFutureDate(workDate: Date): boolean {
-    const today = new Date()
-    const todayOnly = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())
-    const workDateOnly = Date.UTC(workDate.getUTCFullYear(), workDate.getUTCMonth(), workDate.getUTCDate())
-    return workDateOnly > todayOnly
-  }
-
   private isLeaveOrAbsent(body: Record<string, any>): boolean {
     const status = String(body.status ?? '').toLowerCase()
-    const note = String(body.note ?? '')
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[̀-ͯ]/g, '')
-    return status === 'absent' || status === 'vắng mặt'.toLowerCase() || note.includes('phep')
+    return status === 'absent' || status === 'vắng mặt'.toLowerCase() || mentionsPaidLeave(body.note)
   }
 
   private combineDateTime(workDate: Date, hhmm: string): string {

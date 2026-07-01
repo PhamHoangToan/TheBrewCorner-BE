@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service'
 import { AttendanceService } from '../attendance/attendance.service'
 import { NotificationsService } from '../notifications/notifications.service'
 import { pagination, QueryParams } from '../../common/crud.types'
+import { mentionsPaidLeave } from '../../common/leave-note.util'
 
 const STANDARD_DAYS = 26   // ngày công chuẩn / tháng
 const MIN_OT_MINUTES = 15  // OT tối thiểu mới tính
@@ -59,7 +60,7 @@ export class PayrollService {
 
       // Full-time chỉ được tính nghỉ phép khi ca nghỉ có note dùng phép.
       if (assignment.status === 'ABSENT' || !log?.checkIn) {
-        if (user.employmentType === 'FULL_TIME' && this.usesPaidLeave(assignment.note) && paidLeaveDaysAvailable > 0) {
+        if (user.employmentType === 'FULL_TIME' && mentionsPaidLeave(assignment.note) && paidLeaveDaysAvailable > 0) {
           paidLeaveDaysAvailable--
           paidLeaveDays++
           dayRecords.push({ workDate: assignment.workDate, scheduledIn: assignment.shift.startTime, scheduledOut: assignment.shift.endTime, dayType: 'PAID_LEAVE', workedMinutes: 0, otMinutes: 0, lateMinutes: 0, earlyMinutes: 0, penaltyAmount: 0 })
@@ -314,13 +315,5 @@ export class PayrollService {
 
   private minutesOfDay(dt: Date): number {
     return dt.getHours() * 60 + dt.getMinutes()
-  }
-
-  private usesPaidLeave(note?: string | null): boolean {
-    const normalized = String(note ?? '')
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-    return normalized.includes('phep') || normalized.includes('paid leave') || /\bleave\b/.test(normalized)
   }
 }
