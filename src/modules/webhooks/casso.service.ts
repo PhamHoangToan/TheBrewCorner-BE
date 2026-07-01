@@ -28,7 +28,7 @@ export class CassoService {
   ) {}
 
   async handleWebhook(payload: CassoPayload) {
-    if (payload.error !== 0) return { processed: 0 }
+    if (payload.error !== 0) return { success: 1, processed: 0 }
 
     const transactions: CassoTransaction[] = Array.isArray(payload.data)
       ? payload.data
@@ -46,7 +46,7 @@ export class CassoService {
     }
 
     this.logger.log(`Casso webhook: ${transactions.length} tx(s), ${processed} processed`)
-    return { processed }
+    return { success: 1, processed }
   }
 
   private async matchAndPay(tx: CassoTransaction): Promise<boolean> {
