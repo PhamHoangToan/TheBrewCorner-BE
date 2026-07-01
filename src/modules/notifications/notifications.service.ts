@@ -17,7 +17,9 @@ export type NotifType =
   | 'RETURN_REJECTED'
   | 'CHECKOUT_REQUESTED'
   | 'LOW_STOCK'
+  | 'STOCK_FORECAST'
   | 'PAYROLL_READY'
+  | 'RESERVATION_NEW'
 
 interface SendParams {
   role: NotifRole | NotifRole[]
@@ -80,5 +82,9 @@ export class NotificationsService {
   async countUnread(role: string) {
     const count = await this.prisma.notification.count({ where: { role, read: false } })
     return { count }
+  }
+
+  emitOrderUpdate(orderId: string, payload: unknown) {
+    this.gateway.emitOrderUpdate(orderId, payload)
   }
 }

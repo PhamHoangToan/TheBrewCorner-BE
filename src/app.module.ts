@@ -27,6 +27,7 @@ import { LeaveRequestsModule } from './modules/leave-requests/leave-requests.mod
 import { DashboardModule } from './modules/dashboard/dashboard.module'
 import { WebhooksModule } from './modules/webhooks/webhooks.module'
 import { PendingTransfersModule } from './modules/pending-transfers/pending-transfers.module'
+import { ReservationsModule } from './modules/reservations/reservations.module'
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { PendingTransfersModule } from './modules/pending-transfers/pending-tran
     InvoicesModule,
     OrdersModule,
     PendingTransfersModule,
+    ReservationsModule,
     ProductsModule,
     PromotionsModule,
     ReportsModule,

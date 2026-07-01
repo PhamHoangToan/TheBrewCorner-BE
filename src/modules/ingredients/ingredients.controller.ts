@@ -15,6 +15,11 @@ export class IngredientsController {
     return this.ingredientsService.stockStats()
   }
 
+  @Get('forecast')
+  forecast() {
+    return this.ingredientsService.forecast()
+  }
+
   @Get('stock-imports/list')
   stockImports(@Query() query: Record<string, string | undefined>) {
     return this.ingredientsService.stockImports(query)

@@ -30,4 +30,16 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       client.join(`role:${data.role}`)
     }
   }
+
+  // Customer app join theo orderId để nhận cập nhật trạng thái đơn realtime (VD: đã pha xong)
+  @SubscribeMessage('join:order')
+  handleJoinOrder(@MessageBody() data: { orderId: string }, @ConnectedSocket() client: Socket) {
+    if (data?.orderId) {
+      client.join(`order:${data.orderId}`)
+    }
+  }
+
+  emitOrderUpdate(orderId: string, payload: unknown) {
+    this.server.to(`order:${orderId}`).emit('order:updated', payload)
+  }
 }

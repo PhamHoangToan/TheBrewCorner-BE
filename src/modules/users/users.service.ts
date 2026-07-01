@@ -67,6 +67,27 @@ export class UsersService {
     return item
   }
 
+  async loyalty(id: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: { id: true, loyaltyPoints: true, totalSpent: true, membershipTier: true },
+    })
+    if (!user) throw new NotFoundException('User not found')
+
+    const transactions = await this.prisma.loyaltyTransaction.findMany({
+      where: { userId: id },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    })
+
+    return {
+      loyaltyPoints: user.loyaltyPoints,
+      totalSpent: parseFloat(String(user.totalSpent)),
+      membershipTier: user.membershipTier,
+      transactions,
+    }
+  }
+
   async create(body: Record<string, any>) {
     const email = body.email ?? null
 

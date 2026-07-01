@@ -84,6 +84,64 @@ export class IngredientsService {
     }))
   }
 
+  // Dự đoán ngày hết hàng dựa trên tốc độ tiêu thụ trung bình (xuất kho lý do SALES) 14 ngày gần nhất
+  async forecast() {
+    const windowDays = 14
+    const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000)
+
+    const rows = await this.prisma.$queryRaw<Array<{
+      id: string
+      name: string
+      unit: string
+      stockQuantity: number
+      totalUsed: number | null
+    }>>`
+      SELECT i.id, i.name, i.unit,
+             CAST(i.stockQuantity AS DECIMAL(10,2)) AS stockQuantity,
+             CAST(COALESCE(SUM(sei.quantity), 0) AS DECIMAL(10,2)) AS totalUsed
+      FROM ingredients i
+      LEFT JOIN stock_export_items sei ON sei.ingredientId = i.id
+      LEFT JOIN stock_exports se ON se.id = sei.stockExportId
+        AND se.reason = 'SALES' AND se.exportDate >= ${since}
+      WHERE i.isActive = 1
+      GROUP BY i.id, i.name, i.unit, i.stockQuantity
+      ORDER BY i.name ASC
+    `
+
+    return rows.map((row) => {
+      const stockQuantity = Number(row.stockQuantity)
+      const totalUsed = Number(row.totalUsed ?? 0)
+      const avgDailyUsage = totalUsed / windowDays
+
+      if (avgDailyUsage <= 0) {
+        return {
+          ingredientId: row.id,
+          name: row.name,
+          unit: row.unit,
+          stockQuantity,
+          avgDailyUsage: 0,
+          daysUntilStockout: null,
+          predictedStockoutDate: null,
+          hasEnoughData: false,
+        }
+      }
+
+      const daysUntilStockout = stockQuantity / avgDailyUsage
+      const predictedStockoutDate = new Date(Date.now() + daysUntilStockout * 24 * 60 * 60 * 1000)
+
+      return {
+        ingredientId: row.id,
+        name: row.name,
+        unit: row.unit,
+        stockQuantity,
+        avgDailyUsage: Math.round(avgDailyUsage * 100) / 100,
+        daysUntilStockout: Math.round(daysUntilStockout * 10) / 10,
+        predictedStockoutDate: predictedStockoutDate.toISOString(),
+        hasEnoughData: true,
+      }
+    })
+  }
+
   async stockImports(query: QueryParams) {
     const { skip, take, page, limit } = pagination(query)
     const [items, total] = await this.prisma.$transaction([

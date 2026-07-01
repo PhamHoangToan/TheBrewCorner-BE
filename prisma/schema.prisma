@@ -132,6 +132,9 @@ model User {
   baseSalary            Decimal                       @default(0) @db.Decimal(12, 2)
   otRatePerHour         Decimal                       @default(0) @db.Decimal(10, 2)
   paidLeaveDaysLeft     Int                           @default(12)
+  loyaltyPoints         Int                           @default(0)
+  totalSpent            Decimal                       @default(0) @db.Decimal(12, 2)
+  membershipTier        MembershipTier                @default(BASIC)
   createdAt             DateTime                      @default(now())
   updatedAt             DateTime                      @updatedAt
   orders                Order[]                       @relation("OrderCreatedBy")
@@ -145,6 +148,8 @@ model User {
   payrolls              Payroll[]
   leaveRequests         LeaveRequest[]
   attendanceCorrections AttendanceCorrectionRequest[]
+  reservations          Reservation[]
+  loyaltyTransactions   LoyaltyTransaction[]
 
   @@map("users")
 }
@@ -225,17 +230,18 @@ model Area {
 }
 
 model CafeTable {
-  id           String      @id @default(cuid()) @db.VarChar(36)
-  code         String      @unique @db.VarChar(32)
-  name         String      @db.VarChar(80)
-  areaId       String      @db.VarChar(36)
-  seatCount    Int         @default(2)
-  status       TableStatus @default(AVAILABLE)
-  displayOrder Int         @default(0)
-  area         Area        @relation(fields: [areaId], references: [id])
+  id           String        @id @default(cuid()) @db.VarChar(36)
+  code         String        @unique @db.VarChar(32)
+  name         String        @db.VarChar(80)
+  areaId       String        @db.VarChar(36)
+  seatCount    Int           @default(2)
+  status       TableStatus   @default(AVAILABLE)
+  displayOrder Int           @default(0)
+  area         Area          @relation(fields: [areaId], references: [id])
   orders       Order[]
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  reservations Reservation[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
 
   @@index([areaId])
   @@map("cafe_tables")
@@ -420,6 +426,7 @@ model Invoice {
 
   @@index([cashierId])
   @@index([promotionId])
+  @@index([status, paidAt])
   @@map("invoices")
 }
 
@@ -453,6 +460,60 @@ model PendingTransfer {
   createdAt DateTime              @default(now())
 
   @@map("pending_transfers")
+}
+
+enum ReservationStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+}
+
+model Reservation {
+  id             String            @id @default(cuid()) @db.VarChar(36)
+  customerId     String?           @db.VarChar(36)
+  customerName   String            @db.VarChar(100)
+  customerPhone  String            @db.VarChar(20)
+  tableId        String?           @db.VarChar(36)
+  numberOfGuests Int               @default(1)
+  reservedTime   DateTime
+  note           String?           @db.VarChar(255)
+  status         ReservationStatus @default(PENDING)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  customer       User?             @relation(fields: [customerId], references: [id])
+  table          CafeTable?        @relation(fields: [tableId], references: [id])
+
+  @@index([customerId])
+  @@index([tableId])
+  @@map("reservations")
+}
+
+enum MembershipTier {
+  BASIC
+  SILVER
+  GOLD
+}
+
+enum LoyaltyTransactionType {
+  EARN
+  REDEEM
+  ADJUST
+}
+
+model LoyaltyTransaction {
+  id          String                 @id @default(cuid()) @db.VarChar(36)
+  userId      String                 @db.VarChar(36)
+  orderId     String?                @db.VarChar(36)
+  points      Int
+  type        LoyaltyTransactionType
+  description String?                @db.VarChar(255)
+  createdAt   DateTime               @default(now())
+  user        User                   @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("loyalty_transactions")
 }
 
 model Ingredient {

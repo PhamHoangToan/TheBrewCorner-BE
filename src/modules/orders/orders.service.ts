@@ -175,6 +175,10 @@ export class OrdersService {
 
     const tableLabel = order.table ? `Bàn ${order.table.name}` : 'Mang về'
 
+    if (body.status) {
+      this.notifications.emitOrderUpdate(order.id, { status: order.status })
+    }
+
     if (body.status === 'PREPARING') {
       await this.notifications.send({
         role: ['cashier', 'waiter'],

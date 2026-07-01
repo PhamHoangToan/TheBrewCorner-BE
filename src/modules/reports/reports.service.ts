@@ -23,9 +23,10 @@ export class ReportsService {
     }
   }
 
-  async revenue() {
+  async revenue(query: { startDate?: string; endDate?: string }) {
+    const range = this.dateRange(query)
     const invoices = await this.prisma.invoice.findMany({
-      where: { status: 'PAID' },
+      where: { status: 'PAID', ...(range ? { paidAt: range } : {}) },
       orderBy: { paidAt: 'desc' },
       select: { code: true, totalAmount: true, paidAt: true, issuedAt: true },
     })
@@ -37,10 +38,12 @@ export class ReportsService {
     }))
   }
 
-  async sales() {
+  async sales(query: { startDate?: string; endDate?: string }) {
+    const range = this.dateRange(query)
     const items = await this.prisma.orderItem.groupBy({
       by: ['productId', 'productName'],
       _sum: { quantity: true, totalPrice: true },
+      where: range ? { order: { invoice: { status: 'PAID', paidAt: range } } } : undefined,
       orderBy: { _sum: { quantity: 'desc' } },
     })
 
@@ -50,5 +53,40 @@ export class ReportsService {
       quantity: item._sum.quantity ?? 0,
       revenue: Number(item._sum.totalPrice ?? 0),
     }))
+  }
+
+  async topProducts(query: { startDate?: string; endDate?: string; limit?: string }) {
+    const items = await this.sales(query)
+    const limit = Number(query.limit ?? 10)
+    return items.slice(0, limit)
+  }
+
+  async revenueByHour(query: { startDate?: string; endDate?: string }) {
+    const range = this.dateRange(query)
+    const since = range?.gte ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+    const until = range?.lte ?? new Date()
+
+    const rows = await this.prisma.$queryRaw<Array<{ hour: number; revenue: number; orderCount: number }>>`
+      SELECT HOUR(paidAt) AS hour,
+             CAST(SUM(totalAmount) AS DECIMAL(14,2)) AS revenue,
+             COUNT(*) AS orderCount
+      FROM invoices
+      WHERE status = 'PAID' AND paidAt BETWEEN ${since} AND ${until}
+      GROUP BY HOUR(paidAt)
+    `
+
+    const byHour = new Map(rows.map((r) => [Number(r.hour), r]))
+    return Array.from({ length: 24 }, (_, hour) => ({
+      hour,
+      revenue: Number(byHour.get(hour)?.revenue ?? 0),
+      orderCount: Number(byHour.get(hour)?.orderCount ?? 0),
+    }))
+  }
+
+  private dateRange(query: { startDate?: string; endDate?: string }) {
+    if (!query.startDate && !query.endDate) return undefined
+    const gte = query.startDate ? new Date(`${query.startDate}T00:00:00`) : undefined
+    const lte = query.endDate ? new Date(`${query.endDate}T23:59:59.999`) : undefined
+    return { ...(gte ? { gte } : {}), ...(lte ? { lte } : {}) }
   }
 }
