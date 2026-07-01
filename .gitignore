@@ -12,6 +12,9 @@ dist/
 # Prisma
 prisma/migrations/dev.db
 
+# Ảnh upload cũ (đã migrate hết lên Cloudinary — xem scripts/migrate-images-to-cloudinary.ts)
+uploads/
+
 # Logs
 *.log
 npm-debug.log*

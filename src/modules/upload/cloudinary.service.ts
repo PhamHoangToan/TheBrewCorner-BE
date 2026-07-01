@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common'
-import { v2 as cloudinary, type UploadApiResponse } from 'cloudinary'
+import { v2 as cloudinary, type UploadApiErrorResponse, type UploadApiResponse } from 'cloudinary'
 
 @Injectable()
 export class CloudinaryService {
@@ -15,7 +15,7 @@ export class CloudinaryService {
     return new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
         { folder: 'the-brew-corner' },
-        (error, result) => {
+        (error?: UploadApiErrorResponse, result?: UploadApiResponse) => {
           if (error || !result) return reject(error ?? new Error('Cloudinary upload failed'))
           resolve(result)
         },
