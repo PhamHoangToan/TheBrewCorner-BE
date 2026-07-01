@@ -1,0 +1,33 @@
+import {
+  WebSocketGateway,
+  WebSocketServer,
+  OnGatewayConnection,
+  OnGatewayDisconnect,
+  SubscribeMessage,
+  MessageBody,
+  ConnectedSocket,
+} from '@nestjs/websockets'
+import { Server, Socket } from 'socket.io'
+
+@WebSocketGateway({ cors: { origin: true, credentials: true } })
+export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisconnect {
+  @WebSocketServer()
+  server!: Server
+
+  handleConnection(client: Socket) {
+    const role = client.handshake.query.role as string
+    if (role) {
+      client.join(`role:${role}`)
+    }
+  }
+
+  handleDisconnect(_client: Socket) {}
+
+  @SubscribeMessage('join')
+  handleJoin(@MessageBody() data: { role: string }, @ConnectedSocket() client: Socket) {
+    if (data?.role) {
+      client.rooms.forEach((room) => { if (room !== client.id) client.leave(room) })
+      client.join(`role:${data.role}`)
+    }
+  }
+}

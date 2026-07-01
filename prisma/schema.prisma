@@ -1,0 +1,644 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  CASHIER
+  BARISTA
+  WAITER
+  CUSTOMER
+}
+
+enum StaffStatus {
+  ACTIVE
+  ON_LEAVE
+  INACTIVE
+}
+
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+}
+
+enum PayrollStatus {
+  DRAFT
+  APPROVED
+  PAID
+}
+
+enum TableStatus {
+  AVAILABLE
+  SERVING
+  CHECKOUT_REQUESTED
+  RESERVED
+  INACTIVE
+}
+
+enum OrderStatus {
+  DRAFT
+  SENT
+  PREPARING
+  READY
+  SERVED
+  CHECKOUT_REQUESTED
+  PAID
+  CANCELLED
+}
+
+enum OrderType {
+  DINE_IN
+  TAKE_AWAY
+}
+
+enum OrderItemStatus {
+  PENDING
+  PREPARING
+  READY
+  SERVED
+  RETURNED
+  CANCELLED
+}
+
+enum InvoiceStatus {
+  UNPAID
+  PAID
+  VOID
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  CARD
+  E_WALLET
+}
+
+enum StockExportReason {
+  SALES
+  DAMAGED
+  EXPIRED
+  OTHER
+}
+
+enum FinanceType {
+  RECEIPT
+  EXPENSE
+}
+
+enum PromotionStatus {
+  ACTIVE
+  EXPIRED
+  INACTIVE
+}
+
+enum ShiftStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  ABSENT
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum LeaveType {
+  ANNUAL
+  SICK
+  UNPAID
+}
+
+model User {
+  id                 String               @id @default(cuid()) @db.VarChar(36)
+  code               String               @unique @db.VarChar(32)
+  name               String               @db.VarChar(120)
+  email              String?              @unique @db.VarChar(191)
+  phone              String?              @db.VarChar(20)
+  address            String?              @db.VarChar(255)
+  avatarUrl          String?              @db.VarChar(500)
+  shiftName          String?              @db.VarChar(80)
+  passwordHash       String               @db.VarChar(255)
+  mustChangePassword Boolean              @default(false)
+  role               UserRole
+  status             StaffStatus          @default(ACTIVE)
+  employmentType     EmploymentType       @default(FULL_TIME)
+  baseSalary         Decimal              @default(0) @db.Decimal(12, 2)
+  otRatePerHour      Decimal              @default(0) @db.Decimal(10, 2)
+  paidLeaveDaysLeft  Int                  @default(12)
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  orders             Order[]              @relation("OrderCreatedBy")
+  customerOrders     Order[]              @relation("OrderCustomer")
+  invoices           Invoice[]            @relation("InvoiceCashier")
+  financeEntries     FinanceTransaction[] @relation("FinanceCreatedBy")
+  stockImports       StockImport[]        @relation("StockImportCreatedBy")
+  stockExports       StockExport[]        @relation("StockExportCreatedBy")
+  shiftAssignments   ShiftAssignment[]
+  attendanceLogs     AttendanceLog[]
+  payrolls           Payroll[]
+  leaveRequests      LeaveRequest[]
+  attendanceCorrections AttendanceCorrectionRequest[]
+
+  @@map("users")
+}
+
+model LeaveRequest {
+  id           String        @id @default(cuid()) @db.VarChar(36)
+  userId       String        @db.VarChar(36)
+  startDate    DateTime      @db.Date
+  endDate      DateTime      @db.Date
+  type         LeaveType
+  reason       String        @db.VarChar(500)
+  status       RequestStatus @default(PENDING)
+  rejectReason String?       @db.VarChar(500)
+  decidedAt    DateTime?
+  createdAt    DateTime      @default(now())
+  user         User          @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@map("leave_requests")
+}
+
+model AttendanceCorrectionRequest {
+  id           String        @id @default(cuid()) @db.VarChar(36)
+  userId       String        @db.VarChar(36)
+  workDate     DateTime      @db.Date
+  checkIn      DateTime?
+  checkOut     DateTime?
+  reason       String        @db.VarChar(500)
+  status       RequestStatus @default(PENDING)
+  rejectReason String?       @db.VarChar(500)
+  decidedAt    DateTime?
+  createdAt    DateTime      @default(now())
+  user         User          @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@map("attendance_correction_requests")
+}
+
+model Shift {
+  id          String            @id @default(cuid()) @db.VarChar(36)
+  code        String            @unique @db.VarChar(32)
+  name        String            @db.VarChar(80)
+  startTime   String            @db.VarChar(8)
+  endTime     String            @db.VarChar(8)
+  isActive    Boolean           @default(true)
+  assignments ShiftAssignment[]
+
+  @@map("shifts")
+}
+
+model ShiftAssignment {
+  id        String      @id @default(cuid()) @db.VarChar(36)
+  userId    String      @db.VarChar(36)
+  shiftId   String      @db.VarChar(36)
+  workDate  DateTime    @db.Date
+  status    ShiftStatus @default(SCHEDULED)
+  note      String?     @db.VarChar(255)
+  createdAt DateTime    @default(now())
+  shift     Shift    @relation(fields: [shiftId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@unique([userId, shiftId, workDate])
+  @@map("shift_assignments")
+}
+
+model Area {
+  id        String      @id @default(cuid()) @db.VarChar(36)
+  code      String      @unique @db.VarChar(32)
+  name      String      @db.VarChar(80)
+  floor     String?     @db.VarChar(80)
+  tables    CafeTable[]
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@map("areas")
+}
+
+model CafeTable {
+  id           String      @id @default(cuid()) @db.VarChar(36)
+  code         String      @unique @db.VarChar(32)
+  name         String      @db.VarChar(80)
+  areaId       String      @db.VarChar(36)
+  seatCount    Int         @default(2)
+  status       TableStatus @default(AVAILABLE)
+  displayOrder Int         @default(0)
+  area         Area        @relation(fields: [areaId], references: [id])
+  orders       Order[]
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  @@index([areaId])
+  @@map("cafe_tables")
+}
+
+model Category {
+  id          String    @id @default(cuid()) @db.VarChar(36)
+  code        String    @unique @db.VarChar(32)
+  name        String    @db.VarChar(120)
+  description String?   @db.VarChar(255)
+  isActive    Boolean   @default(true)
+  products    Product[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("categories")
+}
+
+model Product {
+  id         String           @id @default(cuid()) @db.VarChar(36)
+  code       String           @unique @db.VarChar(32)
+  name       String           @db.VarChar(160)
+  type       String           @db.VarChar(80)
+  unit       String           @db.VarChar(32)
+  price      Decimal          @db.Decimal(12, 2)
+  imageUrl   String?          @db.VarChar(255)
+  emoji      String?          @db.VarChar(16)
+  isActive   Boolean          @default(true)
+  categoryId String           @db.VarChar(36)
+  category   Category         @relation(fields: [categoryId], references: [id])
+  sizes      ProductSize[]
+  toppings   ProductTopping[]
+  recipes    ProductRecipe[]
+  orderItems OrderItem[]
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  @@index([categoryId])
+  @@map("products")
+}
+
+model ProductSize {
+  id        String  @id @default(cuid()) @db.VarChar(36)
+  productId String  @db.VarChar(36)
+  name      String  @db.VarChar(40)
+  price     Decimal @db.Decimal(12, 2)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, name])
+  @@map("product_sizes")
+}
+
+model Topping {
+  id        String             @id @default(cuid()) @db.VarChar(36)
+  code      String             @unique @db.VarChar(32)
+  name      String             @db.VarChar(120)
+  price     Decimal            @db.Decimal(12, 2)
+  isActive  Boolean            @default(true)
+  products  ProductTopping[]
+  orderUses OrderItemTopping[]
+
+  @@map("toppings")
+}
+
+model ProductTopping {
+  id        String  @id @default(cuid()) @db.VarChar(36)
+  productId String  @db.VarChar(36)
+  toppingId String  @db.VarChar(36)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  topping   Topping @relation(fields: [toppingId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, toppingId])
+  @@map("product_toppings")
+}
+
+model ProductRecipe {
+  id           String     @id @default(cuid()) @db.VarChar(36)
+  productId    String     @db.VarChar(36)
+  ingredientId String     @db.VarChar(36)
+  quantity     Decimal    @db.Decimal(10, 2)
+  wastePercent Decimal    @default(0) @db.Decimal(5, 2)
+  unit         String     @db.VarChar(32)
+  product      Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id])
+
+  @@unique([productId, ingredientId])
+  @@map("product_recipes")
+}
+
+model Order {
+  id             String      @id @default(cuid()) @db.VarChar(36)
+  code           String      @unique @db.VarChar(32)
+  type           OrderType   @default(DINE_IN)
+  status         OrderStatus @default(SENT)
+  tableId        String?     @db.VarChar(36)
+  createdById    String?     @db.VarChar(36)
+  customerId     String?     @db.VarChar(36)
+  peopleCount    Int         @default(1)
+  subtotal       Decimal     @default(0) @db.Decimal(12, 2)
+  discountAmount Decimal     @default(0) @db.Decimal(12, 2)
+  totalAmount    Decimal     @default(0) @db.Decimal(12, 2)
+  note           String?     @db.VarChar(255)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  table          CafeTable?  @relation(fields: [tableId], references: [id])
+  createdBy      User?       @relation("OrderCreatedBy", fields: [createdById], references: [id])
+  customer       User?       @relation("OrderCustomer", fields: [customerId], references: [id])
+  items          OrderItem[]
+  invoice        Invoice?
+
+  @@index([tableId])
+  @@index([createdById])
+  @@index([customerId])
+  @@map("orders")
+}
+
+model OrderItem {
+  id          String             @id @default(cuid()) @db.VarChar(36)
+  orderId     String             @db.VarChar(36)
+  productId   String             @db.VarChar(36)
+  productName String             @db.VarChar(160)
+  quantity    Int
+  unitPrice   Decimal            @db.Decimal(12, 2)
+  totalPrice  Decimal            @db.Decimal(12, 2)
+  status      OrderItemStatus    @default(PENDING)
+  note        String?            @db.VarChar(255)
+  order       Order              @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product     Product            @relation(fields: [productId], references: [id])
+  toppings    OrderItemTopping[]
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("order_items")
+}
+
+model OrderItemTopping {
+  id          String    @id @default(cuid()) @db.VarChar(36)
+  orderItemId String    @db.VarChar(36)
+  toppingId   String    @db.VarChar(36)
+  toppingName String    @db.VarChar(120)
+  price       Decimal   @db.Decimal(12, 2)
+  orderItem   OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  topping     Topping   @relation(fields: [toppingId], references: [id])
+
+  @@unique([orderItemId, toppingId])
+  @@map("order_item_toppings")
+}
+
+model Promotion {
+  id              String          @id @default(cuid()) @db.VarChar(36)
+  code            String          @unique @db.VarChar(32)
+  name            String          @db.VarChar(160)
+  conditionText   String          @db.VarChar(255)
+  minOrderAmount  Decimal?        @db.Decimal(12, 2)
+  discountPercent Int
+  startDate       DateTime        @db.Date
+  endDate         DateTime        @db.Date
+  status          PromotionStatus @default(ACTIVE)
+  invoices        Invoice[]
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@map("promotions")
+}
+
+model Invoice {
+  id             String           @id @default(cuid()) @db.VarChar(36)
+  code           String           @unique @db.VarChar(32)
+  orderId        String           @unique @db.VarChar(36)
+  cashierId      String?          @db.VarChar(36)
+  promotionId    String?          @db.VarChar(36)
+  subtotal       Decimal          @db.Decimal(12, 2)
+  discountAmount Decimal          @default(0) @db.Decimal(12, 2)
+  totalAmount    Decimal          @db.Decimal(12, 2)
+  status         InvoiceStatus    @default(UNPAID)
+  issuedAt       DateTime         @default(now())
+  paidAt         DateTime?
+  order          Order            @relation(fields: [orderId], references: [id])
+  cashier        User?            @relation("InvoiceCashier", fields: [cashierId], references: [id])
+  promotion      Promotion?       @relation(fields: [promotionId], references: [id])
+  payments       InvoicePayment[]
+
+  @@index([cashierId])
+  @@index([promotionId])
+  @@map("invoices")
+}
+
+model InvoicePayment {
+  id        String        @id @default(cuid()) @db.VarChar(36)
+  invoiceId String        @db.VarChar(36)
+  method    PaymentMethod
+  amount    Decimal       @db.Decimal(12, 2)
+  paidAt    DateTime      @default(now())
+  note      String?       @db.VarChar(255)
+  invoice   Invoice       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("invoice_payments")
+}
+
+model Ingredient {
+  id             String            @id @default(cuid()) @db.VarChar(36)
+  code           String            @unique @db.VarChar(32)
+  name           String            @db.VarChar(160)
+  unit           String            @db.VarChar(32)
+  usagePerUnit   Decimal           @default(1) @db.Decimal(12, 4)
+  stockQuantity  Decimal           @default(0) @db.Decimal(10, 2)
+  minQuantity    Decimal           @default(0) @db.Decimal(10, 2)
+  isActive       Boolean           @default(true)
+  recipes       ProductRecipe[]
+  importItems   StockImportItem[]
+  exportItems   StockExportItem[]
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@map("ingredients")
+}
+
+model StockImport {
+  id           String            @id @default(cuid()) @db.VarChar(36)
+  code         String            @unique @db.VarChar(32)
+  importDate   DateTime          @db.Date
+  supplierName String            @db.VarChar(160)
+  note         String?           @db.VarChar(255)
+  totalAmount  Decimal           @default(0) @db.Decimal(12, 2)
+  createdById  String?           @db.VarChar(36)
+  createdBy    User?             @relation("StockImportCreatedBy", fields: [createdById], references: [id])
+  items        StockImportItem[]
+  createdAt    DateTime          @default(now())
+
+  @@index([createdById])
+  @@map("stock_imports")
+}
+
+model StockImportItem {
+  id             String      @id @default(cuid()) @db.VarChar(36)
+  stockImportId  String      @db.VarChar(36)
+  ingredientId   String      @db.VarChar(36)
+  ingredientName String      @db.VarChar(160)
+  quantity       Decimal     @db.Decimal(10, 2)
+  unit           String      @db.VarChar(32)
+  unitPrice      Decimal     @db.Decimal(12, 2)
+  totalPrice     Decimal     @db.Decimal(12, 2)
+  stockImport    StockImport @relation(fields: [stockImportId], references: [id], onDelete: Cascade)
+  ingredient     Ingredient  @relation(fields: [ingredientId], references: [id])
+
+  @@index([stockImportId])
+  @@index([ingredientId])
+  @@map("stock_import_items")
+}
+
+model StockExport {
+  id          String            @id @default(cuid()) @db.VarChar(36)
+  code        String            @unique @db.VarChar(32)
+  exportDate  DateTime          @db.Date
+  reason      StockExportReason
+  note        String?           @db.VarChar(255)
+  createdById String?           @db.VarChar(36)
+  createdBy   User?             @relation("StockExportCreatedBy", fields: [createdById], references: [id])
+  items       StockExportItem[]
+  createdAt   DateTime          @default(now())
+
+  @@index([createdById])
+  @@map("stock_exports")
+}
+
+model StockExportItem {
+  id             String      @id @default(cuid()) @db.VarChar(36)
+  stockExportId  String      @db.VarChar(36)
+  ingredientId   String      @db.VarChar(36)
+  ingredientName String      @db.VarChar(160)
+  quantity       Decimal     @db.Decimal(10, 2)
+  unit           String      @db.VarChar(32)
+  stockExport    StockExport @relation(fields: [stockExportId], references: [id], onDelete: Cascade)
+  ingredient     Ingredient  @relation(fields: [ingredientId], references: [id])
+
+  @@index([stockExportId])
+  @@index([ingredientId])
+  @@map("stock_export_items")
+}
+
+model Notification {
+  id        String   @id @default(cuid()) @db.VarChar(36)
+  role      String   @db.VarChar(20)
+  title     String   @db.VarChar(160)
+  body      String   @db.VarChar(255)
+  type      String   @db.VarChar(40)
+  refId     String?  @db.VarChar(36)
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([role, read])
+  @@map("notifications")
+}
+
+model FinanceTransaction {
+  id          String      @id @default(cuid()) @db.VarChar(36)
+  code        String      @unique @db.VarChar(32)
+  type        FinanceType
+  content     String      @db.VarChar(255)
+  amount      Decimal     @db.Decimal(12, 2)
+  createdById String?     @db.VarChar(36)
+  createdBy   User?       @relation("FinanceCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime    @default(now())
+
+  @@index([createdById])
+  @@map("finance_transactions")
+}
+
+model AttendanceLog {
+  id        String    @id @default(cuid()) @db.VarChar(36)
+  userId    String    @db.VarChar(36)
+  checkIn   DateTime
+  checkOut  DateTime?
+  workDate  DateTime  @db.Date
+  source    String    @default("FACE") @db.VarChar(20)
+  note      String?   @db.VarChar(255)
+  user      User      @relation(fields: [userId], references: [id])
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([userId, workDate])
+  @@map("attendance_logs")
+}
+
+model PenaltyConfig {
+  id                    String   @id @default(cuid()) @db.VarChar(36)
+  lateGraceMinutes      Int      @default(5)
+  penaltyPerMinuteLate  Decimal  @default(0) @db.Decimal(10, 2)
+  earlyGraceMinutes     Int      @default(5)
+  penaltyPerMinuteEarly Decimal  @default(0) @db.Decimal(10, 2)
+  updatedAt             DateTime @updatedAt
+
+  @@map("penalty_config")
+}
+
+model Payroll {
+  id             String         @id @default(cuid()) @db.VarChar(36)
+  userId         String         @db.VarChar(36)
+  periodYear     Int
+  periodMonth    Int
+  employmentType EmploymentType
+  baseSalary     Decimal        @db.Decimal(12, 2)
+  scheduledDays  Int            @default(0)
+  workedDays     Int            @default(0)
+  paidLeaveDays  Int            @default(0)
+  absentDays     Int            @default(0)
+  totalHours     Decimal        @default(0) @db.Decimal(8, 2)
+  otHours        Decimal        @default(0) @db.Decimal(8, 2)
+  otAmount       Decimal        @default(0) @db.Decimal(12, 2)
+  penaltyAmount  Decimal        @default(0) @db.Decimal(12, 2)
+  totalAmount    Decimal        @default(0) @db.Decimal(12, 2)
+  status         PayrollStatus  @default(DRAFT)
+  note           String?        @db.VarChar(255)
+  user           User           @relation(fields: [userId], references: [id])
+  days           PayrollDay[]
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@unique([userId, periodYear, periodMonth])
+  @@index([periodYear, periodMonth])
+  @@map("payrolls")
+}
+
+model PayrollDay {
+  id            String    @id @default(cuid()) @db.VarChar(36)
+  payrollId     String    @db.VarChar(36)
+  workDate      DateTime  @db.Date
+  scheduledIn   String?   @db.VarChar(8)
+  scheduledOut  String?   @db.VarChar(8)
+  actualIn      DateTime?
+  actualOut     DateTime?
+  workedMinutes Int       @default(0)
+  otMinutes     Int       @default(0)
+  lateMinutes   Int       @default(0)
+  earlyMinutes  Int       @default(0)
+  penaltyAmount Decimal   @default(0) @db.Decimal(10, 2)
+  dayType       String    @db.VarChar(20)
+  payroll       Payroll   @relation(fields: [payrollId], references: [id], onDelete: Cascade)
+
+  @@index([payrollId])
+  @@map("payroll_days")
+}
+
+// Nhật ký hoạt động — ghi tự động qua ActivityLogInterceptor cho mọi request
+// thay đổi dữ liệu (POST/PATCH/PUT/DELETE) trên toàn hệ thống. Không dùng quan hệ
+// Prisma tới User để log vẫn giữ nguyên được kể cả khi nhân viên đó bị xóa sau này.
+model ActivityLog {
+  id          String   @id @default(cuid()) @db.VarChar(36)
+  userId      String?  @db.VarChar(36)
+  userName    String?  @db.VarChar(120)
+  userRole    String?  @db.VarChar(20)
+  method      String   @db.VarChar(10)
+  path        String   @db.VarChar(255)
+  module      String   @db.VarChar(50)
+  action      String   @db.VarChar(20)
+  description String   @db.VarChar(500)
+  statusCode  Int
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([module])
+  @@index([createdAt])
+  @@map("activity_logs")
+}
+
