@@ -75,11 +75,19 @@ export class CassoService {
       return false
     }
 
+    const expected = parseFloat(String(order.totalAmount ?? 0))
+    if (expected > 0 && tx.amount < expected) {
+      this.logger.warn(
+        `Order ${orderCode}: số tiền chuyển khoản (${tx.amount}) thấp hơn tổng hóa đơn (${expected}) — không tự động thanh toán, cần cashier kiểm tra thủ công`,
+      )
+      return false
+    }
+
     const invoice = await this.invoicesService.create({
       orderId: order.id,
-      subtotal: parseFloat(String(order.totalAmount ?? tx.amount)),
+      subtotal: expected || tx.amount,
       discountAmount: 0,
-      totalAmount: tx.amount,
+      totalAmount: expected || tx.amount,
     })
 
     await this.invoicesService.pay(invoice.id, {

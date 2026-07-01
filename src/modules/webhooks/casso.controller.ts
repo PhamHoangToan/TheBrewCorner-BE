@@ -16,7 +16,7 @@ export class CassoController {
     @Headers('x-api-key') apiKey?: string,
   ) {
     const secret = this.configService.get<string>('CASSO_API_KEY')
-    if (secret && apiKey !== secret) {
+    if (!secret || apiKey !== secret) {
       throw new UnauthorizedException('Invalid API key')
     }
     return this.cassoService.handleWebhook(body)
