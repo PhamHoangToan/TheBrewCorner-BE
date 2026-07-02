@@ -10,11 +10,16 @@ const roleToFe = {
   CUSTOMER: 'customer',
 } as const
 
+// Web nội bộ (TheBrewCorner-FE) chỉ dành cho 4 tài khoản đại diện mỗi role.
+// Nhân viên khác đăng nhập qua app mobile (TheBrewCorner-Employee), app này
+// không gửi header X-Client nên không bị chặn bởi whitelist dưới đây.
+const WEB_INTERNAL_ALLOWED_CODES = ['NV001', 'NV002', 'NV003', 'NV004']
+
 @Injectable()
 export class AuthService {
   constructor(private readonly usersService: UsersService) {}
 
-  async login(body: Record<string, any>) {
+  async login(body: Record<string, any>, client?: string) {
     const identifier = body.email ?? body.username ?? body.code
     if (!identifier) throw new UnauthorizedException('Missing login identifier')
     if (!body.password) throw new UnauthorizedException('Missing password')
@@ -23,6 +28,13 @@ export class AuthService {
     if (!user) throw new UnauthorizedException('Invalid credentials')
     if (!verifyPassword(String(body.password), user.passwordHash)) {
       throw new UnauthorizedException('Invalid credentials')
+    }
+    if (
+      client === 'web-internal' &&
+      user.role !== 'CUSTOMER' &&
+      !WEB_INTERNAL_ALLOWED_CODES.includes(user.code)
+    ) {
+      throw new UnauthorizedException('Tài khoản này chỉ đăng nhập được trên app di động')
     }
 
     return this.authResponse(user)
