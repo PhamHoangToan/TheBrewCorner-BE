@@ -32,7 +32,7 @@ export class UsersService {
 
   async findAll(query: QueryParams) {
     const { skip, take, page, limit } = pagination(query)
-    const where: Prisma.UserWhereInput = {}
+    const where: Prisma.UserWhereInput = { deletedAt: null }
 
     if (query.search) {
       where.OR = [
@@ -59,8 +59,8 @@ export class UsersService {
   }
 
   async findOne(id: string) {
-    const item = await this.prisma.user.findUnique({
-      where: { id },
+    const item = await this.prisma.user.findFirst({
+      where: { id, deletedAt: null },
       select: this.publicSelect(),
     })
     if (!item) throw new NotFoundException('User not found')
@@ -160,24 +160,16 @@ export class UsersService {
   }
 
   async remove(id: string) {
-    // Các bảng lịch sử giao dịch (đơn hàng, hóa đơn, thu chi, nhập/xuất kho...) đều có
-    // quan hệ user tùy chọn (User?) nên vẫn an toàn khi nhân viên bị xóa. Riêng các bảng
-    // thuộc về "hồ sơ làm việc" (ca làm, chấm công, lương, nghỉ phép) có quan hệ user bắt
-    // buộc — phải dọn theo, nếu không sẽ để lại bản ghi mồ côi làm crash các API include user.
-    await this.prisma.$transaction([
-      this.prisma.shiftAssignment.deleteMany({ where: { userId: id } }),
-      this.prisma.attendanceLog.deleteMany({ where: { userId: id } }),
-      this.prisma.attendanceCorrectionRequest.deleteMany({ where: { userId: id } }),
-      this.prisma.leaveRequest.deleteMany({ where: { userId: id } }),
-      this.prisma.payroll.deleteMany({ where: { userId: id } }),
-      this.prisma.user.delete({ where: { id } }),
-    ])
+    // Soft delete: chỉ ẩn khỏi danh sách/đăng nhập, không xóa khỏi DB — giữ nguyên
+    // lịch sử ca làm, chấm công, lương, đơn hàng đã gắn với nhân viên này.
+    await this.prisma.user.update({ where: { id }, data: { deletedAt: new Date() } })
     return { deleted: true }
   }
 
   async findForLogin(emailOrCode: string) {
     return this.prisma.user.findFirst({
       where: {
+        deletedAt: null,
         OR: [{ email: emailOrCode }, { code: emailOrCode }, { phone: emailOrCode }],
       },
     })

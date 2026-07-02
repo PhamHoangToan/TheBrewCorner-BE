@@ -13,8 +13,8 @@ export class IngredientsService {
   async findAll(query: QueryParams) {
     const { skip, take, page, limit } = pagination(query)
     const where = query.search
-      ? { name: { contains: query.search } }
-      : {}
+      ? { deletedAt: null, name: { contains: query.search } }
+      : { deletedAt: null }
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.ingredient.findMany({ where, skip, take, orderBy: { createdAt: 'desc' } }),
@@ -25,7 +25,7 @@ export class IngredientsService {
   }
 
   async findOne(id: string) {
-    const item = await this.prisma.ingredient.findUnique({ where: { id } })
+    const item = await this.prisma.ingredient.findFirst({ where: { id, deletedAt: null } })
     if (!item) throw new NotFoundException('Ingredient not found')
     return item
   }
@@ -59,12 +59,13 @@ export class IngredientsService {
   }
 
   async remove(id: string) {
-    await this.prisma.ingredient.delete({ where: { id } })
+    await this.prisma.ingredient.update({ where: { id }, data: { deletedAt: new Date() } })
     return { deleted: true }
   }
 
   async stockStats() {
     const ingredients = await this.prisma.ingredient.findMany({
+      where: { deletedAt: null },
       include: {
         importItems: true,
         exportItems: true,
@@ -103,7 +104,7 @@ export class IngredientsService {
       LEFT JOIN stock_export_items sei ON sei.ingredientId = i.id
       LEFT JOIN stock_exports se ON se.id = sei.stockExportId
         AND se.reason = 'SALES' AND se.exportDate >= ${since}
-      WHERE i.isActive = 1
+      WHERE i.isActive = 1 AND i.deletedAt IS NULL
       GROUP BY i.id, i.name, i.unit, i.stockQuantity
       ORDER BY i.name ASC
     `

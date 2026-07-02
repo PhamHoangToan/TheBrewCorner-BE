@@ -17,7 +17,7 @@ export class OrdersService {
 
   async findAll(query: QueryParams) {
     const { skip, take, page, limit } = pagination(query)
-    const where: Record<string, any> = {}
+    const where: Record<string, any> = { deletedAt: null }
     if (query.status) where.status = query.status
     if (query.tableId) where.tableId = query.tableId
     if (query.customerId) where.customerId = query.customerId
@@ -37,7 +37,7 @@ export class OrdersService {
 
   async findOne(identifier: string) {
     const item = await this.prisma.order.findFirst({
-      where: { OR: [{ id: identifier }, { code: identifier }] },
+      where: { deletedAt: null, OR: [{ id: identifier }, { code: identifier }] },
       include: {
         table: {
           include: {
@@ -55,7 +55,7 @@ export class OrdersService {
 
   async findByCustomer(customerId: string) {
     const items = await this.prisma.order.findMany({
-      where: { customerId },
+      where: { customerId, deletedAt: null },
       orderBy: { createdAt: 'desc' },
       include: { table: { include: { area: true } }, items: true, invoice: true },
       take: 100,
@@ -317,7 +317,7 @@ export class OrdersService {
   }
 
   async remove(id: string) {
-    await this.prisma.order.delete({ where: { id } })
+    await this.prisma.order.update({ where: { id }, data: { deletedAt: new Date() } })
     return { deleted: true }
   }
 

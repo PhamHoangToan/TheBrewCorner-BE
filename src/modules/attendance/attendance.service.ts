@@ -72,7 +72,7 @@ export class AttendanceService {
 
   async findAll(query: QueryParams & { userId?: string; month?: string; year?: string }) {
     const { skip, take, page, limit } = pagination(query)
-    const where: Record<string, any> = {}
+    const where: Record<string, any> = { deletedAt: null }
     if (query.userId) where.userId = query.userId
     if (query.month && query.year) {
       const m = Number(query.month)
@@ -96,7 +96,7 @@ export class AttendanceService {
   }
 
   async remove(id: string) {
-    await this.prisma.attendanceLog.delete({ where: { id } })
+    await this.prisma.attendanceLog.update({ where: { id }, data: { deletedAt: new Date() } })
     return { deleted: true }
   }
 

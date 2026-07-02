@@ -20,21 +20,23 @@ export class InvoicesService {
 
   async findAll(query: QueryParams) {
     const { skip, take, page, limit } = pagination(query)
+    const where = { deletedAt: null }
     const [items, total] = await this.prisma.$transaction([
       this.prisma.invoice.findMany({
+        where,
         skip,
         take,
         orderBy: { issuedAt: 'desc' },
         include: { order: { include: { table: true, items: true } }, cashier: true, promotion: true, payments: true },
       }),
-      this.prisma.invoice.count(),
+      this.prisma.invoice.count({ where }),
     ])
     return { items, total, page, limit }
   }
 
   async findOne(id: string) {
-    const item = await this.prisma.invoice.findUnique({
-      where: { id },
+    const item = await this.prisma.invoice.findFirst({
+      where: { id, deletedAt: null },
       include: { order: { include: { table: true, items: true } }, cashier: true, promotion: true, payments: true },
     })
     if (!item) throw new NotFoundException('Invoice not found')
@@ -162,7 +164,7 @@ export class InvoicesService {
   }
 
   async remove(id: string) {
-    await this.prisma.invoice.delete({ where: { id } })
+    await this.prisma.invoice.update({ where: { id }, data: { deletedAt: new Date() } })
     return { deleted: true }
   }
 

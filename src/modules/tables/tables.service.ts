@@ -9,7 +9,7 @@ export class TablesService {
 
   async findAll(query: QueryParams) {
     const { skip, take, page, limit } = pagination(query)
-    const where: Record<string, any> = {}
+    const where: Record<string, any> = { deletedAt: null }
     if (query.areaId) where.areaId = query.areaId
     if (query.status) where.status = this.status(query.status)
 
@@ -47,7 +47,7 @@ export class TablesService {
   }
 
   async findOne(id: string) {
-    const item = await this.prisma.cafeTable.findUnique({ where: { id }, include: { area: true, orders: true } })
+    const item = await this.prisma.cafeTable.findFirst({ where: { id, deletedAt: null }, include: { area: true, orders: true } })
     if (!item) throw new NotFoundException('Table not found')
     return item
   }
@@ -84,7 +84,7 @@ export class TablesService {
   }
 
   async remove(id: string) {
-    await this.prisma.cafeTable.delete({ where: { id } })
+    await this.prisma.cafeTable.update({ where: { id }, data: { deletedAt: new Date() } })
     return { deleted: true }
   }
 

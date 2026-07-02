@@ -10,8 +10,8 @@ export class PromotionsService {
   async findAll(query: QueryParams) {
     const { skip, take, page, limit } = pagination(query)
     const where = query.search
-      ? { OR: [{ name: { contains: query.search } }, { code: { contains: query.search } }] }
-      : {}
+      ? { deletedAt: null, OR: [{ name: { contains: query.search } }, { code: { contains: query.search } }] }
+      : { deletedAt: null }
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.promotion.findMany({ where, skip, take, orderBy: { createdAt: 'desc' } }),
@@ -22,7 +22,7 @@ export class PromotionsService {
   }
 
   async findOne(id: string) {
-    const item = await this.prisma.promotion.findUnique({ where: { id } })
+    const item = await this.prisma.promotion.findFirst({ where: { id, deletedAt: null } })
     if (!item) throw new NotFoundException('Promotion not found')
     return item
   }
@@ -36,6 +36,7 @@ export class PromotionsService {
 
     return this.prisma.promotion.findMany({
       where: {
+        deletedAt: null,
         status: 'ACTIVE',
         startDate: { lte: todayEnd },
         endDate: { gte: todayStart },
@@ -50,7 +51,7 @@ export class PromotionsService {
     const totalAmount = Number(body.totalAmount ?? 0)
     if (!code) throw new BadRequestException('Promotion code is required')
 
-    const promotion = await this.prisma.promotion.findUnique({ where: { code } })
+    const promotion = await this.prisma.promotion.findFirst({ where: { code, deletedAt: null } })
     if (!promotion) throw new BadRequestException('Promotion code not found')
 
     const now = new Date()
@@ -106,7 +107,7 @@ export class PromotionsService {
   }
 
   async remove(id: string) {
-    await this.prisma.promotion.delete({ where: { id } })
+    await this.prisma.promotion.update({ where: { id }, data: { deletedAt: new Date() } })
     return { deleted: true }
   }
 

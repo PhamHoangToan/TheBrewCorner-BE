@@ -34,12 +34,12 @@ export class PayrollService {
 
     const [assignments, logs] = await Promise.all([
       this.prisma.shiftAssignment.findMany({
-        where: { userId, workDate: { gte: startDate, lte: endDate } },
+        where: { userId, deletedAt: null, workDate: { gte: startDate, lte: endDate } },
         include: { shift: true },
         orderBy: { workDate: 'asc' },
       }),
       this.prisma.attendanceLog.findMany({
-        where: { userId, workDate: { gte: startDate, lte: endDate } },
+        where: { userId, deletedAt: null, workDate: { gte: startDate, lte: endDate } },
       }),
     ])
 

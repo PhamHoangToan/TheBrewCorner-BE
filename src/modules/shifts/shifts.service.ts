@@ -14,9 +14,10 @@ export class ShiftsService {
 
   async findAll(query: QueryParams) {
     const { skip, take, page, limit } = pagination(query)
+    const where = { deletedAt: null }
     const [items, total] = await this.prisma.$transaction([
-      this.prisma.shift.findMany({ skip, take, orderBy: { code: 'asc' } }),
-      this.prisma.shift.count(),
+      this.prisma.shift.findMany({ where, skip, take, orderBy: { code: 'asc' } }),
+      this.prisma.shift.count({ where }),
     ])
     return { items, total, page, limit }
   }
@@ -47,13 +48,13 @@ export class ShiftsService {
   }
 
   async remove(id: string) {
-    await this.prisma.shift.delete({ where: { id } })
+    await this.prisma.shift.update({ where: { id }, data: { deletedAt: new Date() } })
     return { deleted: true }
   }
 
   async assignments(query: QueryParams & { userId?: string; month?: string; year?: string }) {
     const { skip, take, page, limit } = pagination(query)
-    const where: Record<string, any> = {}
+    const where: Record<string, any> = { deletedAt: null }
     if (query.userId) where.userId = query.userId
     if (query.month && query.year) {
       const m = Number(query.month)
@@ -104,7 +105,7 @@ export class ShiftsService {
   }
 
   async removeAssignment(id: string) {
-    await this.prisma.shiftAssignment.delete({ where: { id } })
+    await this.prisma.shiftAssignment.update({ where: { id }, data: { deletedAt: new Date() } })
     return { deleted: true }
   }
 

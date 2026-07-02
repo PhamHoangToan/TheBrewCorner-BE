@@ -9,7 +9,7 @@ export class FinanceService {
 
   async findAll(query: QueryParams) {
     const { skip, take, page, limit } = pagination(query)
-    const where = query.type ? { type: this.type(query.type) } : {}
+    const where = query.type ? { deletedAt: null, type: this.type(query.type) } : { deletedAt: null }
     const [items, total] = await this.prisma.$transaction([
       this.prisma.financeTransaction.findMany({ where, skip, take, orderBy: { createdAt: 'desc' }, include: { createdBy: true } }),
       this.prisma.financeTransaction.count({ where }),
@@ -44,7 +44,7 @@ export class FinanceService {
   }
 
   async remove(id: string) {
-    await this.prisma.financeTransaction.delete({ where: { id } })
+    await this.prisma.financeTransaction.update({ where: { id }, data: { deletedAt: new Date() } })
     return { deleted: true }
   }
 

@@ -8,7 +8,7 @@ export class ProductsService {
 
   async findAll(query: QueryParams) {
     const { skip, take, page, limit } = pagination(query)
-    const where: Record<string, any> = {}
+    const where: Record<string, any> = { deletedAt: null }
 
     if (query.search) where.name = { contains: query.search }
     if (query.categoryId) where.categoryId = query.categoryId
@@ -33,8 +33,8 @@ export class ProductsService {
   }
 
   async findOne(id: string) {
-    const item = await this.prisma.product.findUnique({
-      where: { id },
+    const item = await this.prisma.product.findFirst({
+      where: { id, deletedAt: null },
       include: { category: true, sizes: true, toppings: { include: { topping: true } }, recipes: true },
     })
     if (!item) throw new NotFoundException('Product not found')
@@ -81,7 +81,7 @@ export class ProductsService {
   }
 
   async remove(id: string) {
-    await this.prisma.product.delete({ where: { id } })
+    await this.prisma.product.update({ where: { id }, data: { deletedAt: new Date() } })
     return { deleted: true }
   }
 

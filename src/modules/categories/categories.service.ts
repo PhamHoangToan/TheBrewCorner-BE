@@ -9,8 +9,8 @@ export class CategoriesService {
   async findAll(query: QueryParams) {
     const { skip, take, page, limit } = pagination(query)
     const where = query.search
-      ? { name: { contains: query.search } }
-      : {}
+      ? { deletedAt: null, name: { contains: query.search } }
+      : { deletedAt: null }
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.category.findMany({
@@ -27,8 +27,8 @@ export class CategoriesService {
   }
 
   async findOne(id: string) {
-    const item = await this.prisma.category.findUnique({
-      where: { id },
+    const item = await this.prisma.category.findFirst({
+      where: { id, deletedAt: null },
       include: { products: true },
     })
     if (!item) throw new NotFoundException('Category not found')
@@ -59,7 +59,7 @@ export class CategoriesService {
   }
 
   async remove(id: string) {
-    await this.prisma.category.delete({ where: { id } })
+    await this.prisma.category.update({ where: { id }, data: { deletedAt: new Date() } })
     return { deleted: true }
   }
 }

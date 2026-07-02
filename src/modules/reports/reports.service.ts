@@ -9,7 +9,7 @@ export class ReportsService {
     const [orders, invoices, products, ingredients, tables] = await this.prisma.$transaction([
       this.prisma.order.count(),
       this.prisma.invoice.aggregate({ _sum: { totalAmount: true }, where: { status: 'PAID' } }),
-      this.prisma.product.count({ where: { isActive: true } }),
+      this.prisma.product.count({ where: { isActive: true, deletedAt: null } }),
       this.prisma.ingredient.count({ where: { stockQuantity: { lte: this.prisma.ingredient.fields.minQuantity } as any } }),
       this.prisma.cafeTable.groupBy({ by: ['status'], _count: true, orderBy: { status: 'asc' } }),
     ])
