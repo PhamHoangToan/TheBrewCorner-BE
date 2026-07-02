@@ -11,10 +11,7 @@ export class MailService {
 
     const user = process.env.SMTP_USER
     const pass = process.env.SMTP_PASS
-    if (!user || !pass) {
-      this.logger.warn('SMTP_USER/SMTP_PASS chưa được cấu hình — bỏ qua gửi email (chỉ log ra console)')
-      return null
-    }
+    if (!user || !pass) return null
 
     const port = Number(process.env.SMTP_PORT ?? 465)
     this.transporter = createTransport({
@@ -22,14 +19,40 @@ export class MailService {
       port,
       secure: port === 465, // 465 = TLS ngay từ đầu; 587 (và các port khác) = STARTTLS
       auth: { user, pass },
-      // Render <-> Gmail bắt tay TLS chậm hơn local, default timeout của Nodemailer (~2 phút
-      // connection nhưng greeting/socket ngắn hơn) từng gây "Connection timeout" giả (bị treo
-      // chứ không hẳn bị chặn hẳn) — nới rộng để phân biệt timeout thật với bị chặn hẳn.
       connectionTimeout: 20000,
       greetingTimeout: 20000,
       socketTimeout: 20000,
     })
     return this.transporter
+  }
+
+  // Render chặn outbound SMTP (465/587) nên nodemailer luôn ETIMEDOUT khi deploy —
+  // dùng Resend (gửi qua HTTPS, không bị chặn) làm đường chính. SMTP chỉ còn dùng
+  // được khi chạy local (không có RESEND_API_KEY thì fallback xuống SMTP, nếu
+  // cũng thiếu SMTP_USER/PASS thì log ra console).
+  private async sendViaResend(to: string, subject: string, html: string): Promise<boolean> {
+    const apiKey = process.env.RESEND_API_KEY
+    if (!apiKey) return false
+
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: process.env.MAIL_FROM ?? 'The Brew Corner <onboarding@resend.dev>',
+        to,
+        subject,
+        html,
+      }),
+    })
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => '')
+      throw new Error(`Resend API trả lỗi ${res.status}: ${body}`)
+    }
+    return true
   }
 
   async sendStaffAccountEmail(to: string, data: { name: string; code: string; password: string }) {
@@ -47,6 +70,13 @@ export class MailService {
         <p style="color: #aaa; font-size: 12px;">Email này được gửi tự động, vui lòng không trả lời.</p>
       </div>
     `
+
+    try {
+      if (await this.sendViaResend(to, subject, html)) return
+    } catch (error) {
+      this.logger.error(`Gửi email qua Resend thất bại cho ${to}: ${(error as Error).message}`)
+      return
+    }
 
     const transporter = this.getTransporter()
     if (!transporter) {
