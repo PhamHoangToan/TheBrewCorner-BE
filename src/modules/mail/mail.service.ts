@@ -22,6 +22,12 @@ export class MailService {
       port,
       secure: port === 465, // 465 = TLS ngay từ đầu; 587 (và các port khác) = STARTTLS
       auth: { user, pass },
+      // Render <-> Gmail bắt tay TLS chậm hơn local, default timeout của Nodemailer (~2 phút
+      // connection nhưng greeting/socket ngắn hơn) từng gây "Connection timeout" giả (bị treo
+      // chứ không hẳn bị chặn hẳn) — nới rộng để phân biệt timeout thật với bị chặn hẳn.
+      connectionTimeout: 20000,
+      greetingTimeout: 20000,
+      socketTimeout: 20000,
     })
     return this.transporter
   }
@@ -56,7 +62,10 @@ export class MailService {
         html,
       })
     } catch (error) {
-      this.logger.error(`Gửi email tài khoản thất bại cho ${to}`, error as Error)
+      const err = error as NodeJS.ErrnoException & { command?: string; responseCode?: number }
+      this.logger.error(
+        `Gửi email tài khoản thất bại cho ${to} — code=${err.code} command=${err.command} responseCode=${err.responseCode}: ${err.message}`,
+      )
     }
   }
 }
