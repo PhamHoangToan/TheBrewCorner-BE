@@ -15,6 +15,8 @@ describe('ReportsService', () => {
           useValue: {
             invoice: { findMany: jest.fn() },
             orderItem: { groupBy: jest.fn() },
+            product: { findMany: jest.fn() },
+            stockImportItem: { findMany: jest.fn() },
             $queryRaw: jest.fn(),
           },
         },
@@ -133,6 +135,99 @@ describe('ReportsService', () => {
       const result = await service.revenueByHour({})
       expect(result).toHaveLength(24)
       expect(prisma.$queryRaw).toHaveBeenCalled()
+    })
+  })
+
+  describe('profit', () => {
+    const product = (overrides: Partial<any> = {}) => ({
+      id: 'p1',
+      name: 'Cà phê sữa',
+      price: 30000,
+      recipes: [
+        {
+          ingredientId: 'ing-1',
+          quantity: 100,
+          wastePercent: 10,
+          unit: 'ml',
+          ingredient: { id: 'ing-1', unit: 'chai', usagePerUnit: 1000 },
+        },
+      ],
+      ...overrides,
+    })
+
+    it('tính giá vốn = lượng recipe (kèm hao hụt) quy đổi ra đơn vị kho × giá nhập gần nhất', async () => {
+      prisma.product.findMany.mockResolvedValue([product()])
+      prisma.stockImportItem.findMany.mockResolvedValue([
+        { ingredientId: 'ing-1', unitPrice: 100000, stockImport: { createdAt: new Date('2026-07-01') } },
+      ])
+      prisma.orderItem.groupBy.mockResolvedValue([])
+
+      const result = await service.profit({})
+
+      // 100ml * 1.1 hao hụt = 110ml → 110/1000 = 0.11 chai × 100.000đ = 11.000đ
+      expect(result.items[0]).toMatchObject({
+        productId: 'p1',
+        cost: 11000,
+        margin: 19000,
+        marginPercent: 63,
+        hasRecipe: true,
+      })
+    })
+
+    it('dùng giá nhập gần nhất (lô mới nhất) khi có nhiều lần nhập cho cùng nguyên liệu', async () => {
+      prisma.product.findMany.mockResolvedValue([product()])
+      prisma.stockImportItem.findMany.mockResolvedValue([
+        { ingredientId: 'ing-1', unitPrice: 120000, stockImport: { createdAt: new Date('2026-07-05') } },
+        { ingredientId: 'ing-1', unitPrice: 100000, stockImport: { createdAt: new Date('2026-07-01') } },
+      ])
+      prisma.orderItem.groupBy.mockResolvedValue([])
+
+      const result = await service.profit({})
+
+      // orderBy createdAt desc → lô đầu tiên trong mảng (120.000đ) được lấy làm giá gần nhất
+      expect(result.items[0].cost).toBe(13200) // 0.11 * 120.000
+    })
+
+    it('cost = 0 và hasRecipe = false nếu sản phẩm chưa có công thức', async () => {
+      prisma.product.findMany.mockResolvedValue([product({ recipes: [] })])
+      prisma.stockImportItem.findMany.mockResolvedValue([])
+      prisma.orderItem.groupBy.mockResolvedValue([])
+
+      const result = await service.profit({})
+
+      expect(result.items[0]).toMatchObject({ cost: 0, hasRecipe: false, margin: 30000 })
+    })
+
+    it('gắn soldQty/revenue từ sales() và tính profit = revenue - totalCost', async () => {
+      prisma.product.findMany.mockResolvedValue([product()])
+      prisma.stockImportItem.findMany.mockResolvedValue([
+        { ingredientId: 'ing-1', unitPrice: 100000, stockImport: { createdAt: new Date('2026-07-01') } },
+      ])
+      prisma.orderItem.groupBy.mockResolvedValue([
+        { productId: 'p1', productName: 'Cà phê sữa', _sum: { quantity: 10, totalPrice: 300000 } },
+      ])
+
+      const result = await service.profit({})
+
+      // totalCost = 11.000 * 10 = 110.000; profit = 300.000 - 110.000
+      expect(result.items[0]).toMatchObject({ soldQty: 10, revenue: 300000, totalCost: 110000, profit: 190000 })
+      expect(result.summary).toEqual({ totalRevenue: 300000, totalCost: 110000, totalProfit: 190000 })
+    })
+
+    it('sắp xếp items theo profit giảm dần', async () => {
+      prisma.product.findMany.mockResolvedValue([
+        product({ id: 'p1', name: 'Ít lãi' }),
+        product({ id: 'p2', name: 'Nhiều lãi' }),
+      ])
+      prisma.stockImportItem.findMany.mockResolvedValue([])
+      prisma.orderItem.groupBy.mockResolvedValue([
+        { productId: 'p1', productName: 'Ít lãi', _sum: { quantity: 1, totalPrice: 10000 } },
+        { productId: 'p2', productName: 'Nhiều lãi', _sum: { quantity: 1, totalPrice: 100000 } },
+      ])
+
+      const result = await service.profit({})
+
+      expect(result.items.map((r: any) => r.productId)).toEqual(['p2', 'p1'])
     })
   })
 })

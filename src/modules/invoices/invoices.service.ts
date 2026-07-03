@@ -116,6 +116,12 @@ export class InvoicesService {
       if (existing) return existing
     }
 
+    // Tách trạng thái thanh toán khỏi tiến độ pha chế: invoice.status là nguồn sự thật
+    // thanh toán. Order.status chỉ lên 'PAID' (hoàn tất trọn vẹn) khi đơn ĐÃ phục vụ xong —
+    // thanh toán trước khi barista làm xong thì giữ nguyên SENT/PREPARING/READY để bếp còn thấy.
+    const fulfilled = ['SERVED', 'CHECKOUT_REQUESTED', 'PAID'].includes(invoice.order.status)
+    const finalOrderStatus = fulfilled ? 'PAID' : invoice.order.status
+
     const result = await this.prisma.$transaction(async (tx) => {
       const [payment] = await Promise.all([
         tx.invoicePayment.create({
@@ -127,7 +133,17 @@ export class InvoicesService {
           },
         }),
         tx.invoice.update({ where: { id }, data: { status: 'PAID', paidAt: new Date() } }),
-        tx.order.update({ where: { id: invoice.orderId }, data: { status: 'PAID' } }),
+        ...(fulfilled
+          ? [
+              tx.order.update({ where: { id: invoice.orderId }, data: { status: 'PAID' } }),
+              // Đơn hoàn tất: các item còn dang dở coi như đã phục vụ (barista thường chỉ
+              // cập nhật cấp order, item dễ kẹt PENDING làm TableMap/KDS hiểu nhầm còn việc)
+              tx.orderItem.updateMany({
+                where: { orderId: invoice.orderId, status: { notIn: ['SERVED', 'RETURNED', 'CANCELLED'] } },
+                data: { status: 'SERVED' },
+              }),
+            ]
+          : []),
         ...(invoice.order.tableId
           ? [tx.cafeTable.update({ where: { id: invoice.order.tableId }, data: { status: 'SERVING' } })]
           : []),
@@ -166,7 +182,7 @@ export class InvoicesService {
     }, { timeout: 15000, maxWait: 10000 })
 
     // Emit realtime ngoài transaction — chỉ là side-effect socket, không cần rollback nếu lỗi
-    this.notifications.emitOrderUpdate(invoice.orderId, { status: 'PAID' })
+    this.notifications.emitOrderUpdate(invoice.orderId, { status: finalOrderStatus, invoiceStatus: 'PAID' })
 
     return result
   }

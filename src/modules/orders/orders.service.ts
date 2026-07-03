@@ -160,8 +160,9 @@ export class OrdersService {
     }
 
     if (body.pendingTransferCode) {
-      const paid = await this.payFromPendingTransfer(order.id, order.totalAmount, String(body.pendingTransferCode))
-      if (paid) order.status = 'PAID' as OrderStatus
+      // Khách trả trước qua CK: invoice PAID ghi nhận thanh toán, nhưng order giữ nguyên
+      // SENT — barista còn phải pha chế, không đánh dấu hoàn tất sớm
+      await this.payFromPendingTransfer(order.id, order.totalAmount, String(body.pendingTransferCode))
     }
 
     const tableLabel = order.table ? `Bàn ${order.table.name}` : 'Mang về'
@@ -210,10 +211,30 @@ export class OrdersService {
   }
 
   async update(id: string, body: Record<string, any>) {
+    // Order.status là tiến độ phục vụ (SENT→PREPARING→READY→SERVED); 'PAID' là trạng thái
+    // hoàn tất trọn vẹn (đã phục vụ xong VÀ invoice đã thanh toán) — chỉ hệ thống tự set.
+    let requestedStatus = body.status ? this.status(body.status) : undefined
+    if (requestedStatus) {
+      const existing = await this.prisma.order.findFirst({
+        where: { id, deletedAt: null },
+        select: { status: true, invoice: { select: { status: true } } },
+      })
+      if (!existing) throw new NotFoundException('Order not found')
+      // Đơn đã hoàn tất (PAID): không cho hạ về trạng thái pha chế — barista bấm nhầm
+      // từng ghi đè mất trạng thái thanh toán. Chỉ còn cho phép hủy (hoàn tiền/sự cố).
+      if (existing.status === 'PAID' && !['PAID', 'CANCELLED'].includes(requestedStatus)) {
+        throw new BadRequestException('Đơn đã thanh toán và hoàn tất — không thể đổi lại trạng thái pha chế')
+      }
+      // Phục vụ xong mà tiền đã thu trước đó → tự chuyển hoàn tất
+      if (requestedStatus === 'SERVED' && existing.invoice?.status === 'PAID') {
+        requestedStatus = 'PAID'
+      }
+    }
+
     const order = await this.prisma.order.update({
       where: { id },
       data: {
-        status: body.status ? this.status(body.status) : undefined,
+        status: requestedStatus,
         peopleCount: body.peopleCount,
         subtotal: body.subtotal,
         discountAmount: body.discountAmount,
@@ -222,6 +243,15 @@ export class OrdersService {
       },
       include: { items: true, table: true },
     })
+
+    // Phục vụ xong toàn đơn: item còn dang dở coi như đã phục vụ (barista board chỉ
+    // cập nhật cấp order — không cascade thì TableMap/KDS kẹt item PENDING mãi)
+    if (requestedStatus === 'SERVED' || requestedStatus === 'PAID') {
+      await this.prisma.orderItem.updateMany({
+        where: { orderId: id, status: { notIn: ['SERVED', 'RETURNED', 'CANCELLED'] } },
+        data: { status: 'SERVED' },
+      })
+    }
 
     const tableLabel = order.table ? `Bàn ${order.table.name}` : 'Mang về'
 

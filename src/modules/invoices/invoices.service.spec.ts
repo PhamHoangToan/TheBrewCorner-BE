@@ -11,6 +11,7 @@ const makeInvoice = (overrides: Partial<any> = {}) => ({
   status: 'UNPAID',
   order: {
     id: 'order-1',
+    status: 'SERVED',
     tableId: null,
     customerId: null,
     items: [],
@@ -31,6 +32,7 @@ describe('InvoicesService — pay()', () => {
       invoicePayment: { create: jest.fn().mockResolvedValue({ id: 'payment-1' }) },
       invoice: { update: jest.fn().mockResolvedValue({}) },
       order: { update: jest.fn().mockResolvedValue({}) },
+      orderItem: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
       cafeTable: { update: jest.fn().mockResolvedValue({}) },
       loyaltyTransaction: { create: jest.fn().mockResolvedValue({}) },
       user: { update: jest.fn() },
@@ -70,8 +72,8 @@ describe('InvoicesService — pay()', () => {
     expect(prisma.$transaction).not.toHaveBeenCalled()
   })
 
-  it('tạo payment, set invoice/order PAID và emit order update', async () => {
-    const invoice = makeInvoice()
+  it('order đã SERVED: tạo payment, set invoice PAID, promote order lên PAID (hoàn tất trọn vẹn)', async () => {
+    const invoice = makeInvoice() // order.status mặc định SERVED
     prisma.invoice.findUnique.mockResolvedValue(invoice)
 
     await service.pay('invoice-1', { method: 'CASH', amount: 100000 })
@@ -84,7 +86,36 @@ describe('InvoicesService — pay()', () => {
       data: { status: 'PAID', paidAt: expect.any(Date) },
     })
     expect(tx.order.update).toHaveBeenCalledWith({ where: { id: 'order-1' }, data: { status: 'PAID' } })
-    expect(notifications.emitOrderUpdate).toHaveBeenCalledWith('order-1', { status: 'PAID' })
+    // Item dang dở được cascade sang SERVED để TableMap/KDS không kẹt
+    expect(tx.orderItem.updateMany).toHaveBeenCalledWith({
+      where: { orderId: 'order-1', status: { notIn: ['SERVED', 'RETURNED', 'CANCELLED'] } },
+      data: { status: 'SERVED' },
+    })
+    expect(notifications.emitOrderUpdate).toHaveBeenCalledWith('order-1', { status: 'PAID', invoiceStatus: 'PAID' })
+  })
+
+  it('order CHECKOUT_REQUESTED (khách xin tính tiền): thanh toán xong cũng promote lên PAID', async () => {
+    const invoice = makeInvoice({ order: { id: 'order-1', status: 'CHECKOUT_REQUESTED', tableId: null, customerId: null, items: [] } })
+    prisma.invoice.findUnique.mockResolvedValue(invoice)
+
+    await service.pay('invoice-1', { method: 'CASH' })
+
+    expect(tx.order.update).toHaveBeenCalledWith({ where: { id: 'order-1' }, data: { status: 'PAID' } })
+  })
+
+  it('order chưa phục vụ xong (PREPARING): invoice PAID nhưng KHÔNG đổi order.status — barista còn thấy đơn', async () => {
+    const invoice = makeInvoice({ order: { id: 'order-1', status: 'PREPARING', tableId: null, customerId: null, items: [] } })
+    prisma.invoice.findUnique.mockResolvedValue(invoice)
+
+    await service.pay('invoice-1', { method: 'BANK_TRANSFER' })
+
+    expect(tx.invoice.update).toHaveBeenCalledWith({
+      where: { id: 'invoice-1' },
+      data: { status: 'PAID', paidAt: expect.any(Date) },
+    })
+    expect(tx.order.update).not.toHaveBeenCalled()
+    expect(tx.orderItem.updateMany).not.toHaveBeenCalled()
+    expect(notifications.emitOrderUpdate).toHaveBeenCalledWith('order-1', { status: 'PREPARING', invoiceStatus: 'PAID' })
   })
 
   it('cập nhật bàn về SERVING nếu order có tableId', async () => {
