@@ -135,6 +135,7 @@ model User {
   loyaltyPoints         Int                           @default(0)
   totalSpent            Decimal                       @default(0) @db.Decimal(12, 2)
   membershipTier        MembershipTier                @default(BASIC)
+  birthday              DateTime?                     @db.Date
   deletedAt             DateTime?
   createdAt             DateTime                      @default(now())
   updatedAt             DateTime                      @updatedAt
@@ -151,6 +152,9 @@ model User {
   attendanceCorrections AttendanceCorrectionRequest[]
   reservations          Reservation[]
   loyaltyTransactions   LoyaltyTransaction[]
+  productReviews        ProductReview[]
+  shiftChangeRequests   ShiftChangeRequest[]
+  personalVouchers      PersonalVoucher[]
 
   @@map("users")
 }
@@ -200,6 +204,7 @@ model Shift {
   isActive    Boolean           @default(true)
   deletedAt   DateTime?
   assignments ShiftAssignment[]
+  changeRequests ShiftChangeRequest[]
 
   @@map("shifts")
 }
@@ -276,6 +281,8 @@ model Product {
   imageUrl   String?          @db.VarChar(255)
   emoji      String?          @db.VarChar(16)
   isActive   Boolean          @default(true)
+  // Món tạm hết trong ngày (86 list): set = cuối ngày hôm nay, tự hết hiệu lực khi qua ngày
+  soldOutUntil DateTime?
   deletedAt  DateTime?
   categoryId String           @db.VarChar(36)
   category   Category         @relation(fields: [categoryId], references: [id])
@@ -283,6 +290,7 @@ model Product {
   toppings   ProductTopping[]
   recipes    ProductRecipe[]
   orderItems OrderItem[]
+  reviews    ProductReview[]
   createdAt  DateTime         @default(now())
   updatedAt  DateTime         @updatedAt
 
@@ -526,6 +534,91 @@ model LoyaltyTransaction {
   @@map("loyalty_transactions")
 }
 
+// Đánh giá món của khách sau khi order đã thanh toán
+model ProductReview {
+  id        String   @id @default(cuid()) @db.VarChar(36)
+  productId String   @db.VarChar(36)
+  userId    String   @db.VarChar(36)
+  orderId   String   @db.VarChar(36)
+  rating    Int // 1-5 sao
+  comment   String?  @db.VarChar(500)
+  createdAt DateTime @default(now())
+  product   Product  @relation(fields: [productId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+
+  // Mỗi khách chỉ đánh giá 1 lần cho 1 món trong 1 order
+  @@unique([orderId, productId, userId])
+  @@index([productId])
+  @@map("product_reviews")
+}
+
+enum ShiftRequestType {
+  REGISTER // đăng ký nhận ca trống
+  SWAP     // xin đổi/nhượng ca đã được phân
+}
+
+// Yêu cầu đăng ký/đổi ca từ app Employee — admin duyệt trên FE nội bộ
+model ShiftChangeRequest {
+  id                 String           @id @default(cuid()) @db.VarChar(36)
+  userId             String           @db.VarChar(36)
+  type               ShiftRequestType
+  shiftId            String           @db.VarChar(36)
+  workDate           DateTime         @db.Date
+  targetAssignmentId String?          @db.VarChar(36) // assignment muốn nhượng lại (SWAP)
+  reason             String           @db.VarChar(500)
+  status             RequestStatus    @default(PENDING)
+  rejectReason       String?          @db.VarChar(500)
+  decidedAt          DateTime?
+  createdAt          DateTime         @default(now())
+  user               User             @relation(fields: [userId], references: [id])
+  shift              Shift            @relation(fields: [shiftId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@map("shift_change_requests")
+}
+
+// Nhà cung cấp nguyên vật liệu
+model Supplier {
+  id        String        @id @default(cuid()) @db.VarChar(36)
+  code      String        @unique @db.VarChar(32)
+  name      String        @db.VarChar(160)
+  phone     String?       @db.VarChar(20)
+  address   String?       @db.VarChar(255)
+  note      String?       @db.VarChar(255)
+  imports   StockImport[]
+  deletedAt DateTime?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  @@map("suppliers")
+}
+
+enum VoucherStatus {
+  ACTIVE
+  USED
+  EXPIRED
+}
+
+// Voucher cá nhân (sinh nhật, tri ân...) — khác Promotion (áp dụng chung)
+model PersonalVoucher {
+  id              String        @id @default(cuid()) @db.VarChar(36)
+  code            String        @unique @db.VarChar(32)
+  userId          String        @db.VarChar(36)
+  name            String        @db.VarChar(160)
+  discountPercent Int
+  minOrderAmount  Decimal?      @db.Decimal(12, 2)
+  expiresAt       DateTime
+  status          VoucherStatus @default(ACTIVE)
+  usedAt          DateTime?
+  orderId         String?       @db.VarChar(36) // order đã dùng voucher này
+  createdAt       DateTime      @default(now())
+  user            User          @relation(fields: [userId], references: [id])
+
+  @@index([userId, status])
+  @@map("personal_vouchers")
+}
+
 model Ingredient {
   id            String            @id @default(cuid()) @db.VarChar(36)
   code          String            @unique @db.VarChar(32)
@@ -550,6 +643,8 @@ model StockImport {
   code         String            @unique @db.VarChar(32)
   importDate   DateTime          @db.Date
   supplierName String            @db.VarChar(160)
+  supplierId   String?           @db.VarChar(36)
+  supplier     Supplier?         @relation(fields: [supplierId], references: [id])
   note         String?           @db.VarChar(255)
   totalAmount  Decimal           @default(0) @db.Decimal(12, 2)
   createdById  String?           @db.VarChar(36)
@@ -558,6 +653,7 @@ model StockImport {
   createdAt    DateTime          @default(now())
 
   @@index([createdById])
+  @@index([supplierId])
   @@map("stock_imports")
 }
 
@@ -611,6 +707,8 @@ model StockExportItem {
 model Notification {
   id        String   @id @default(cuid()) @db.VarChar(36)
   role      String   @db.VarChar(20)
+  // Thông báo cá nhân (duyệt nghỉ phép, phân ca...) — null nếu là thông báo chung theo role
+  userId    String?  @db.VarChar(36)
   title     String   @db.VarChar(160)
   body      String   @db.VarChar(255)
   type      String   @db.VarChar(40)
@@ -619,6 +717,7 @@ model Notification {
   createdAt DateTime @default(now())
 
   @@index([role, read])
+  @@index([userId, read])
   @@map("notifications")
 }
 

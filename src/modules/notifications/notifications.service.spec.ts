@@ -64,7 +64,7 @@ describe('NotificationsService', () => {
       await service.send({ role: 'barista', title: 'Order mới', body: 'Bàn 1 — 2 món', type: 'ORDER_NEW', refId: 'order-1' })
 
       expect(prisma.notification.create).toHaveBeenCalledWith({
-        data: { role: 'barista', title: 'Order mới', body: 'Bàn 1 — 2 món', type: 'ORDER_NEW', refId: 'order-1' },
+        data: { role: 'barista', userId: null, title: 'Order mới', body: 'Bàn 1 — 2 món', type: 'ORDER_NEW', refId: 'order-1' },
       })
       expect(toMock).toHaveBeenCalledWith('role:barista')
       expect(emitMock).toHaveBeenCalledWith('notification:new', notif)
@@ -275,16 +275,27 @@ describe('NotificationsService', () => {
   // ─── markAllRead ─────────────────────────────────────────────────────────────
 
   describe('markAllRead', () => {
-    it('updates all unread for role to read=true', async () => {
+    it('updates all unread role-wide notifications to read=true', async () => {
       jest.spyOn(prisma.notification, 'updateMany').mockResolvedValue({ count: 3 })
 
-      const result = await service.markAllRead('waiter')
+      const result = await service.markAllRead({ role: 'waiter' })
 
       expect(prisma.notification.updateMany).toHaveBeenCalledWith({
-        where: { role: 'waiter', read: false },
+        where: { role: 'waiter', userId: null, read: false },
         data: { read: true },
       })
       expect(result).toEqual({ success: true })
+    })
+
+    it('updates personal notifications when userId given', async () => {
+      jest.spyOn(prisma.notification, 'updateMany').mockResolvedValue({ count: 1 })
+
+      await service.markAllRead({ userId: 'user-1' })
+
+      expect(prisma.notification.updateMany).toHaveBeenCalledWith({
+        where: { userId: 'user-1', read: false },
+        data: { read: true },
+      })
     })
   })
 
@@ -294,12 +305,23 @@ describe('NotificationsService', () => {
     it('returns unread count for role', async () => {
       jest.spyOn(prisma.notification, 'count').mockResolvedValue(7)
 
-      const result = await service.countUnread('admin')
+      const result = await service.countUnread({ role: 'admin' })
 
       expect(prisma.notification.count).toHaveBeenCalledWith({
-        where: { role: 'admin', read: false },
+        where: { role: 'admin', userId: null, read: false },
       })
       expect(result).toEqual({ count: 7 })
+    })
+
+    it('returns unread count for a specific user', async () => {
+      jest.spyOn(prisma.notification, 'count').mockResolvedValue(2)
+
+      const result = await service.countUnread({ userId: 'user-1' })
+
+      expect(prisma.notification.count).toHaveBeenCalledWith({
+        where: { userId: 'user-1', read: false },
+      })
+      expect(result).toEqual({ count: 2 })
     })
   })
 })

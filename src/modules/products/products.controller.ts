@@ -30,6 +30,11 @@ export class ProductsController {
     return this.productsService.create(body)
   }
 
+  @Patch(':id/sold-out')
+  setSoldOut(@Param('id') id: string, @Body() body: { soldOut?: boolean }) {
+    return this.productsService.setSoldOut(id, body.soldOut ?? true)
+  }
+
   @Patch(':id')
   update(@Param('id') id: string, @Body() body: Record<string, unknown>) {
     return this.productsService.update(id, body)

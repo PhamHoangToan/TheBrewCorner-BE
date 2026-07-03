@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing'
 import { IngredientsService } from './ingredients.service'
 import { PrismaService } from '../../prisma/prisma.service'
 import { LowStockJob } from '../jobs/low-stock.job'
+import { SuppliersService } from '../suppliers/suppliers.service'
 
 describe('IngredientsService — forecast()', () => {
   let service: IngredientsService
@@ -13,6 +14,7 @@ describe('IngredientsService — forecast()', () => {
         IngredientsService,
         { provide: PrismaService, useValue: { $queryRaw: jest.fn() } },
         { provide: LowStockJob, useValue: {} },
+        { provide: SuppliersService, useValue: {} },
       ],
     }).compile()
 

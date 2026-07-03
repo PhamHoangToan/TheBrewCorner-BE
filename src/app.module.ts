@@ -17,6 +17,7 @@ import { ReportsModule } from './modules/reports/reports.module'
 import { ShiftsModule } from './modules/shifts/shifts.module'
 import { TablesModule } from './modules/tables/tables.module'
 import { UsersModule } from './modules/users/users.module'
+import { VouchersModule } from './modules/vouchers/vouchers.module'
 import { ConfigModule } from '@nestjs/config'
 import { ScheduleModule } from '@nestjs/schedule'
 import { NotificationsModule } from './modules/notifications/notifications.module'
@@ -28,6 +29,9 @@ import { DashboardModule } from './modules/dashboard/dashboard.module'
 import { WebhooksModule } from './modules/webhooks/webhooks.module'
 import { PendingTransfersModule } from './modules/pending-transfers/pending-transfers.module'
 import { ReservationsModule } from './modules/reservations/reservations.module'
+import { ReviewsModule } from './modules/reviews/reviews.module'
+import { SuppliersModule } from './modules/suppliers/suppliers.module'
+import { TrashModule } from './modules/trash/trash.module'
 
 @Module({
   imports: [
@@ -57,9 +61,13 @@ import { ReservationsModule } from './modules/reservations/reservations.module'
     ProductsModule,
     PromotionsModule,
     ReportsModule,
+    ReviewsModule,
     ShiftsModule,
+    SuppliersModule,
     TablesModule,
+    TrashModule,
     UsersModule,
+    VouchersModule,
   ],
   providers: [{ provide: APP_INTERCEPTOR, useClass: ActivityLogInterceptor }],
 })

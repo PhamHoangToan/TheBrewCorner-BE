@@ -40,6 +40,16 @@ export class OrdersController {
     return this.ordersService.create(body)
   }
 
+  @Post(':id/split')
+  split(@Param('id') id: string, @Body() body: { itemIds?: string[] }) {
+    return this.ordersService.split(id, body.itemIds ?? [])
+  }
+
+  @Post(':id/merge')
+  merge(@Param('id') id: string, @Body() body: { sourceOrderId?: string }) {
+    return this.ordersService.merge(id, body.sourceOrderId ?? '')
+  }
+
   @Patch(':id')
   update(@Param('id') id: string, @Body() body: Record<string, unknown>) {
     return this.ordersService.update(id, body)

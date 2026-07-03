@@ -2,12 +2,14 @@ import { Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../prisma/prisma.service'
 import { money, pagination, QueryParams } from '../../common/crud.types'
 import { LowStockJob } from '../jobs/low-stock.job'
+import { SuppliersService } from '../suppliers/suppliers.service'
 
 @Injectable()
 export class IngredientsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly lowStockJob: LowStockJob,
+    private readonly suppliersService: SuppliersService,
   ) {}
 
   async findAll(query: QueryParams) {
@@ -159,12 +161,30 @@ export class IngredientsService {
 
   async createStockImport(body: Record<string, any>) {
     const items = (body.items ?? []) as Record<string, any>[]
+
+    // Gắn phiếu nhập với NCC: ưu tiên supplierId từ FE mới, fallback tự tạo/tìm theo tên
+    // để tương thích dữ liệu cũ chỉ có supplierName dạng text
+    let supplierId: string | null = body.supplierId ?? null
+    let supplierName: string = body.supplierName ?? body.nhacungcap ?? ''
+    if (supplierId) {
+      const supplier = await this.prisma.supplier.findFirst({ where: { id: supplierId, deletedAt: null } })
+      if (supplier) supplierName = supplier.name
+      else supplierId = null
+    } else if (supplierName.trim()) {
+      const supplier = await this.suppliersService.findOrCreateByName(supplierName)
+      if (supplier) {
+        supplierId = supplier.id
+        supplierName = supplier.name
+      }
+    }
+
     return this.prisma.$transaction(async (tx) => {
       const doc = await tx.stockImport.create({
         data: {
           code: body.code ?? body.maphieunhap ?? `PNK-${Date.now()}`,
           importDate: new Date(body.importDate ?? body.ngaynhap ?? new Date()),
-          supplierName: body.supplierName ?? body.nhacungcap ?? '',
+          supplierName,
+          supplierId,
           note: body.note ?? body.ghichu ?? null,
           totalAmount: items.reduce(
             (sum, item) => sum + Number(item.soluong ?? item.quantity ?? 0) * Number(item.dongia ?? item.unitPrice ?? 0),

@@ -16,13 +16,19 @@ export class NotificationsController {
   }
 
   @Get()
-  findAll(@Query('role') role: string, @Query('page') page = '1', @Query('limit') limit = '20') {
+  findAll(
+    @Query('role') role: string,
+    @Query('userId') userId: string | undefined,
+    @Query('page') page = '1',
+    @Query('limit') limit = '20',
+  ) {
+    if (userId) return this.service.findByUser(userId, Number(page), Number(limit))
     return this.service.findByRole(role, Number(page), Number(limit))
   }
 
   @Get('unread-count')
-  unreadCount(@Query('role') role: string) {
-    return this.service.countUnread(role)
+  unreadCount(@Query('role') role: string, @Query('userId') userId?: string) {
+    return this.service.countUnread({ role, userId })
   }
 
   @Patch(':id/read')
@@ -31,7 +37,7 @@ export class NotificationsController {
   }
 
   @Patch('read-all')
-  markAllRead(@Query('role') role: string) {
-    return this.service.markAllRead(role)
+  markAllRead(@Query('role') role: string, @Query('userId') userId?: string) {
+    return this.service.markAllRead({ role, userId })
   }
 }

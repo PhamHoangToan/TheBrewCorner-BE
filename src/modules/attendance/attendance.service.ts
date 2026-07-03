@@ -1,10 +1,18 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../prisma/prisma.service'
 import { pagination, QueryParams } from '../../common/crud.types'
+import { NotificationsService, NotifRole } from '../notifications/notifications.service'
+
+const ROLE_TO_NOTIF: Record<string, NotifRole> = {
+  ADMIN: 'admin', CASHIER: 'cashier', BARISTA: 'barista', WAITER: 'waiter',
+}
 
 @Injectable()
 export class AttendanceService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   // Được gọi từ máy chấm công (webhook) — tự phân loại check-in / check-out
   async recordFromDevice(params: { employeeCode: string; timestamp: Date; source?: string; note?: string }) {
@@ -179,10 +187,20 @@ export class AttendanceService {
       data: { status: 'COMPLETED' },
     })
 
-    return this.prisma.attendanceCorrectionRequest.update({
+    const approved = await this.prisma.attendanceCorrectionRequest.update({
       where: { id },
       data: { status: 'APPROVED', decidedAt: new Date() },
+      include: { user: { select: { id: true, role: true } } },
     })
+    await this.notifications.send({
+      role: ROLE_TO_NOTIF[approved.user.role] ?? 'waiter',
+      userId: approved.user.id,
+      title: 'Bổ sung chấm công được duyệt',
+      body: `Chấm công ngày ${approved.workDate.toLocaleDateString('vi-VN')} đã được bổ sung`,
+      type: 'CORRECTION_APPROVED',
+      refId: approved.id,
+    })
+    return approved
   }
 
   async rejectCorrection(id: string, reason: string) {
@@ -190,10 +208,20 @@ export class AttendanceService {
     if (!request) throw new NotFoundException('Không tìm thấy yêu cầu bổ sung chấm công')
     if (request.status !== 'PENDING') throw new BadRequestException('Yêu cầu đã được xử lý')
 
-    return this.prisma.attendanceCorrectionRequest.update({
+    const rejected = await this.prisma.attendanceCorrectionRequest.update({
       where: { id },
       data: { status: 'REJECTED', rejectReason: reason, decidedAt: new Date() },
+      include: { user: { select: { id: true, role: true } } },
     })
+    await this.notifications.send({
+      role: ROLE_TO_NOTIF[rejected.user.role] ?? 'waiter',
+      userId: rejected.user.id,
+      title: 'Bổ sung chấm công bị từ chối',
+      body: reason ? `Lý do: ${reason}` : `Yêu cầu ngày ${rejected.workDate.toLocaleDateString('vi-VN')} không được chấp nhận`,
+      type: 'CORRECTION_REJECTED',
+      refId: rejected.id,
+    })
+    return rejected
   }
 
   private toDateOnly(dt: Date): Date {

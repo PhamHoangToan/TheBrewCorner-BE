@@ -1,15 +1,22 @@
-import { Injectable } from '@nestjs/common'
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { Prisma } from '@prisma/client'
 import { PrismaService } from '../../prisma/prisma.service'
 import { pagination, QueryParams } from '../../common/crud.types'
 import { AttendanceService } from '../attendance/attendance.service'
+import { NotificationsService, NotifRole } from '../notifications/notifications.service'
 import { mentionsPaidLeave } from '../../common/leave-note.util'
 import { isFutureDate } from '../../common/date.util'
+
+const ROLE_TO_NOTIF: Record<string, NotifRole> = {
+  ADMIN: 'admin', CASHIER: 'cashier', BARISTA: 'barista', WAITER: 'waiter',
+}
 
 @Injectable()
 export class ShiftsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly attendanceService: AttendanceService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async findAll(query: QueryParams) {
@@ -142,6 +149,18 @@ export class ShiftsService {
       })
     }
 
+    // Báo cho nhân viên biết được phân ca mới (chỉ ca tương lai — nhập bù quá khứ không cần báo)
+    if (isFuture) {
+      await this.notifications.send({
+        role: ROLE_TO_NOTIF[assignment.user.role] ?? 'waiter',
+        userId: assignment.user.id,
+        title: 'Bạn được phân ca mới',
+        body: `${assignment.shift.name} (${assignment.shift.startTime}–${assignment.shift.endTime}) ngày ${workDate.toLocaleDateString('vi-VN')}`,
+        type: 'SHIFT_ASSIGNED',
+        refId: assignment.id,
+      })
+    }
+
     return assignment
   }
 
@@ -170,6 +189,137 @@ export class ShiftsService {
       },
     })
     return created.id
+  }
+
+  // ── Yêu cầu đăng ký / nhượng ca từ app Employee — admin duyệt trên FE nội bộ ──
+
+  async createRequest(body: Record<string, any>) {
+    const type = String(body.type ?? 'REGISTER').toUpperCase() === 'SWAP' ? 'SWAP' : 'REGISTER'
+    const userId = String(body.userId ?? '')
+    const workDate = new Date(body.workDate ?? '')
+    if (!userId || Number.isNaN(workDate.getTime())) throw new BadRequestException('Thiếu userId/workDate')
+
+    let shiftId = String(body.shiftId ?? '')
+    let targetAssignmentId: string | null = null
+
+    if (type === 'SWAP') {
+      // Nhượng lại ca đã được phân: xác thực assignment thuộc đúng user + ngày
+      targetAssignmentId = String(body.targetAssignmentId ?? '')
+      const assignment = await this.prisma.shiftAssignment.findFirst({
+        where: { id: targetAssignmentId, userId, deletedAt: null },
+      })
+      if (!assignment) throw new NotFoundException('Không tìm thấy ca cần nhượng lại')
+      shiftId = assignment.shiftId
+    } else {
+      const shift = await this.prisma.shift.findFirst({ where: { id: shiftId, deletedAt: null } })
+      if (!shift) throw new NotFoundException('Ca làm việc không tồn tại')
+      const existing = await this.prisma.shiftAssignment.findFirst({
+        where: { userId, shiftId, workDate, deletedAt: null },
+      })
+      if (existing) throw new BadRequestException('Bạn đã được phân ca này rồi')
+    }
+
+    const pending = await this.prisma.shiftChangeRequest.findFirst({
+      where: { userId, shiftId, workDate, status: 'PENDING' },
+    })
+    if (pending) throw new BadRequestException('Bạn đã gửi yêu cầu cho ca này, vui lòng chờ duyệt')
+
+    return this.prisma.shiftChangeRequest.create({
+      data: {
+        userId,
+        type,
+        shiftId,
+        workDate,
+        targetAssignmentId,
+        reason: String(body.reason ?? '').slice(0, 500),
+      },
+      include: { shift: true },
+    })
+  }
+
+  async requests(query: QueryParams & { userId?: string; status?: string }) {
+    const { skip, take, page, limit } = pagination(query)
+    const where: Record<string, any> = {}
+    if (query.userId) where.userId = query.userId
+    if (query.status) where.status = query.status
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.shiftChangeRequest.findMany({
+        where,
+        skip,
+        take,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          user: { select: { id: true, name: true, code: true, role: true } },
+          shift: true,
+        },
+      }),
+      this.prisma.shiftChangeRequest.count({ where }),
+    ])
+    return { items, total, page, limit }
+  }
+
+  async approveRequest(id: string) {
+    const request = await this.prisma.shiftChangeRequest.findUnique({ where: { id } })
+    if (!request) throw new NotFoundException('Không tìm thấy yêu cầu')
+    if (request.status !== 'PENDING') throw new BadRequestException('Yêu cầu đã được xử lý')
+
+    if (request.type === 'REGISTER') {
+      try {
+        await this.createAssignment({
+          userId: request.userId,
+          shiftId: request.shiftId,
+          workDate: request.workDate.toISOString(),
+          note: 'Đăng ký ca qua app',
+        })
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+          throw new BadRequestException('Nhân viên đã có ca này rồi')
+        }
+        throw error
+      }
+    } else if (request.targetAssignmentId) {
+      // SWAP: nhượng lại ca — ẩn assignment cũ để admin phân người khác
+      await this.prisma.shiftAssignment.update({
+        where: { id: request.targetAssignmentId },
+        data: { deletedAt: new Date() },
+      })
+    }
+
+    const approved = await this.prisma.shiftChangeRequest.update({
+      where: { id },
+      data: { status: 'APPROVED', decidedAt: new Date() },
+      include: { user: { select: { id: true, role: true } }, shift: true },
+    })
+    await this.notifications.send({
+      role: ROLE_TO_NOTIF[approved.user.role] ?? 'waiter',
+      userId: approved.user.id,
+      title: approved.type === 'SWAP' ? 'Yêu cầu nhượng ca được duyệt' : 'Đăng ký ca được duyệt',
+      body: `${approved.shift.name} ngày ${approved.workDate.toLocaleDateString('vi-VN')}`,
+      type: 'SHIFT_REQUEST_APPROVED',
+      refId: approved.id,
+    })
+    return approved
+  }
+
+  async rejectRequest(id: string, reason: string) {
+    const request = await this.prisma.shiftChangeRequest.findUnique({ where: { id } })
+    if (!request) throw new NotFoundException('Không tìm thấy yêu cầu')
+    if (request.status !== 'PENDING') throw new BadRequestException('Yêu cầu đã được xử lý')
+
+    const rejected = await this.prisma.shiftChangeRequest.update({
+      where: { id },
+      data: { status: 'REJECTED', rejectReason: reason ?? null, decidedAt: new Date() },
+      include: { user: { select: { id: true, role: true } }, shift: true },
+    })
+    await this.notifications.send({
+      role: ROLE_TO_NOTIF[rejected.user.role] ?? 'waiter',
+      userId: rejected.user.id,
+      title: rejected.type === 'SWAP' ? 'Yêu cầu nhượng ca bị từ chối' : 'Đăng ký ca bị từ chối',
+      body: reason ? `Lý do: ${reason}` : `${rejected.shift.name} ngày ${rejected.workDate.toLocaleDateString('vi-VN')}`,
+      type: 'SHIFT_REQUEST_REJECTED',
+      refId: rejected.id,
+    })
+    return rejected
   }
 
   private async findOrCreateShift(body: Record<string, any>) {

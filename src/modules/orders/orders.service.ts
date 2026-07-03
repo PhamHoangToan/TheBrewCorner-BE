@@ -1,10 +1,13 @@
-import { Injectable, NotFoundException } from '@nestjs/common'
-import { OrderStatus, OrderType } from '@prisma/client'
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { OrderStatus, OrderType, Prisma } from '@prisma/client'
 import { PrismaService } from '../../prisma/prisma.service'
 import { pagination, QueryParams } from '../../common/crud.types'
+import { redeemLoyaltyPoints, refundRedeemedPoints } from '../../common/loyalty.util'
+import { convertToStockUnit } from '../../common/unit-conversion.util'
 import { NotificationsService, NotifRole } from '../notifications/notifications.service'
 import { LowStockJob } from '../jobs/low-stock.job'
 import { InvoicesService } from '../invoices/invoices.service'
+import { VouchersService } from '../vouchers/vouchers.service'
 
 @Injectable()
 export class OrdersService {
@@ -13,6 +16,7 @@ export class OrdersService {
     private readonly notifications: NotificationsService,
     private readonly lowStockJob: LowStockJob,
     private readonly invoicesService: InvoicesService,
+    private readonly vouchersService: VouchersService,
   ) {}
 
   async findAll(query: QueryParams) {
@@ -68,11 +72,42 @@ export class OrdersService {
     const tableId = body.tableId ?? (body.table ? await this.resolveTableId(body.table) : undefined)
     const items = (body.items ?? []) as Record<string, any>[]
     const products = await this.productsForItems(items)
+
+    // Chặn đặt món đang báo hết hàng trong ngày (86 list)
+    const now = new Date()
+    const soldOutNames = items
+      .map((item) => products.get(item.productId ?? item.id))
+      .filter((p) => p?.soldOutUntil && p.soldOutUntil > now)
+      .map((p) => p!.name)
+    if (soldOutNames.length) {
+      throw new BadRequestException(`Món tạm hết hàng hôm nay: ${[...new Set(soldOutNames)].join(', ')}`)
+    }
     const subtotal = items.reduce((sum, item) => {
       const product = products.get(item.productId ?? item.id)
       const unitPrice = Number(item.unitPrice ?? item.price ?? product?.price ?? 0)
       return sum + unitPrice * Number(item.quantity ?? item.qty ?? 1)
     }, 0)
+
+    // Validate điểm đổi TRƯỚC khi tạo order — tránh tạo order với tổng đã giảm
+    // rồi mới phát hiện không đủ điểm
+    const redeemPoints = Math.max(0, Math.floor(Number(body.redeemPoints ?? 0)))
+    if (redeemPoints > 0) {
+      if (!body.customerId) throw new BadRequestException('Cần đăng nhập để dùng điểm tích lũy')
+      const customer = await this.prisma.user.findFirst({
+        where: { id: String(body.customerId), deletedAt: null },
+        select: { loyaltyPoints: true },
+      })
+      if (!customer || customer.loyaltyPoints < redeemPoints) {
+        throw new BadRequestException(`Không đủ điểm tích lũy (hiện có ${customer?.loyaltyPoints ?? 0} điểm)`)
+      }
+    }
+
+    // Validate voucher cá nhân TRƯỚC khi tạo order (FE đã trừ sẵn vào discountAmount)
+    const voucherCode = body.voucherCode ? String(body.voucherCode) : null
+    if (voucherCode) {
+      if (!body.customerId) throw new BadRequestException('Cần đăng nhập để dùng voucher')
+      await this.vouchersService.validate({ code: voucherCode, userId: String(body.customerId), totalAmount: subtotal })
+    }
 
     const order = await this.prisma.order.create({
       data: {
@@ -107,6 +142,21 @@ export class OrdersService {
 
     if (tableId) {
       await this.prisma.cafeTable.update({ where: { id: tableId }, data: { status: 'SERVING' } })
+    }
+
+    // Đổi điểm tích lũy: FE đã trừ sẵn vào discountAmount/totalAmount, BE chỉ
+    // trừ điểm + ghi giao dịch REDEEM (hoàn lại nếu hủy đơn)
+    if (redeemPoints > 0 && body.customerId) {
+      await redeemLoyaltyPoints(this.prisma, {
+        userId: String(body.customerId),
+        orderId: order.id,
+        orderCode: order.code,
+        points: redeemPoints,
+      })
+    }
+
+    if (voucherCode && body.customerId) {
+      await this.vouchersService.consume(voucherCode, String(body.customerId), order.id)
     }
 
     if (body.pendingTransferCode) {
@@ -220,6 +270,8 @@ export class OrdersService {
     }
 
     if (body.status === 'CANCELLED') {
+      // Hoàn điểm tích lũy nếu đơn này có dùng điểm (idempotent)
+      await refundRedeemedPoints(this.prisma, order.id)
       await this.notifications.send({
         role: ['cashier', 'waiter'],
         title: 'Order bị huỷ',
@@ -321,6 +373,116 @@ export class OrdersService {
     return { deleted: true }
   }
 
+  // Tách bill: chuyển các item được chọn sang order mới cùng bàn để thanh toán riêng
+  async split(id: string, itemIds: string[]) {
+    if (!itemIds?.length) throw new BadRequestException('Chọn ít nhất 1 món để tách')
+
+    const order = await this.prisma.order.findFirst({
+      where: { id, deletedAt: null },
+      include: { items: true, invoice: true },
+    })
+    if (!order) throw new NotFoundException('Order not found')
+    if (order.status === 'CANCELLED') throw new BadRequestException('Order đã bị hủy')
+    if (order.status === 'PAID' || order.invoice?.status === 'PAID') {
+      throw new BadRequestException('Order đã thanh toán, không thể tách')
+    }
+
+    const activeItems = order.items.filter((i) => !['CANCELLED', 'RETURNED'].includes(i.status))
+    const moving = activeItems.filter((i) => itemIds.includes(i.id))
+    if (moving.length !== itemIds.length) throw new BadRequestException('Có món không hợp lệ hoặc đã hủy/trả')
+    if (moving.length === activeItems.length) {
+      throw new BadRequestException('Không thể tách toàn bộ món — phải để lại ít nhất 1 món')
+    }
+
+    const newOrder = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.order.create({
+        data: {
+          code: `ORD-${Date.now()}`,
+          type: order.type,
+          status: order.status,
+          tableId: order.tableId,
+          createdById: order.createdById,
+          customerId: order.customerId,
+          peopleCount: 1,
+          note: `Tách từ ${order.code}`,
+        },
+      })
+      await tx.orderItem.updateMany({
+        where: { id: { in: itemIds } },
+        data: { orderId: created.id },
+      })
+      await this.recomputeTotals(tx, order.id)
+      await this.recomputeTotals(tx, created.id)
+      return tx.order.findUnique({ where: { id: created.id }, include: { items: true, table: true } })
+    }, { timeout: 15000, maxWait: 10000 })
+
+    return { original: await this.findOne(order.id), splitOrder: newOrder }
+  }
+
+  // Gộp bàn/order: chuyển toàn bộ item của order nguồn vào order đích, hủy order nguồn
+  async merge(id: string, sourceOrderId: string) {
+    if (!sourceOrderId || sourceOrderId === id) throw new BadRequestException('Order nguồn không hợp lệ')
+
+    const [target, source] = await Promise.all([
+      this.prisma.order.findFirst({ where: { id, deletedAt: null }, include: { invoice: true } }),
+      this.prisma.order.findFirst({ where: { id: sourceOrderId, deletedAt: null }, include: { invoice: true, items: true } }),
+    ])
+    if (!target || !source) throw new NotFoundException('Order not found')
+    for (const [label, o] of [['đích', target], ['nguồn', source]] as const) {
+      if (o.status === 'CANCELLED') throw new BadRequestException(`Order ${label} đã bị hủy`)
+      if (o.status === 'PAID' || o.invoice?.status === 'PAID') {
+        throw new BadRequestException(`Order ${label} đã thanh toán, không thể gộp`)
+      }
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.orderItem.updateMany({
+        where: { orderId: source.id },
+        data: { orderId: target.id },
+      })
+      if (source.invoice) {
+        await tx.invoice.update({ where: { id: source.invoice.id }, data: { status: 'VOID' } })
+      }
+      await tx.order.update({
+        where: { id: source.id },
+        data: {
+          status: 'CANCELLED',
+          subtotal: 0,
+          totalAmount: 0,
+          note: `Đã gộp vào ${target.code}`,
+        },
+      })
+      // Bàn của order nguồn (nếu khác bàn đích) không còn order hoạt động → trả về trống
+      if (source.tableId && source.tableId !== target.tableId) {
+        const remaining = await tx.order.count({
+          where: {
+            tableId: source.tableId,
+            deletedAt: null,
+            status: { notIn: ['CANCELLED', 'PAID'] },
+          },
+        })
+        if (remaining === 0) {
+          await tx.cafeTable.update({ where: { id: source.tableId }, data: { status: 'AVAILABLE' } })
+        }
+      }
+      await this.recomputeTotals(tx, target.id)
+    }, { timeout: 15000, maxWait: 10000 })
+
+    return this.findOne(target.id)
+  }
+
+  // Tính lại subtotal/totalAmount từ item còn hiệu lực (sau tách/gộp, bỏ giảm giá cũ)
+  private async recomputeTotals(tx: Prisma.TransactionClient, orderId: string) {
+    const items = await tx.orderItem.findMany({
+      where: { orderId, status: { notIn: ['CANCELLED', 'RETURNED'] } },
+    })
+    const subtotal = items.reduce((sum, item) => sum + parseFloat(String(item.totalPrice)), 0)
+    await tx.order.update({
+      where: { id: orderId },
+      data: { subtotal, discountAmount: 0, totalAmount: subtotal },
+    })
+  }
+
   private async deductIngredientsByItem(productId: string, orderQty: number) {
     await this.adjustStock(productId, orderQty, 'decrement')
   }
@@ -344,7 +506,7 @@ export class OrdersService {
       const stockUnit = recipe.ingredient.unit ?? ''
       const recipeUnit = recipe.unit ?? ''
 
-      const delta = this.convertToStockUnit(rawQty, recipeUnit, stockUnit, usagePerUnit)
+      const delta = convertToStockUnit(rawQty, recipeUnit, stockUnit, usagePerUnit)
 
       await this.prisma.ingredient.update({
         where: { id: recipe.ingredientId },
@@ -355,51 +517,6 @@ export class OrdersService {
 
     if (direction === 'decrement') {
       this.lowStockJob.checkSpecificIngredients(ingredientIds).catch(() => {})
-    }
-  }
-
-  // Chuyển đổi đơn vị recipe (ml, g, muỗng, vá, viên…) sang đơn vị kho (chai, kg, hộp…)
-  private convertToStockUnit(qty: number, recipeUnit: string, stockUnit: string, usagePerUnit: number): number {
-    const ru = recipeUnit.toLowerCase().trim()
-    const su = stockUnit.toLowerCase().trim()
-
-    // Cùng đơn vị: không cần convert
-    if (ru === su) return qty / usagePerUnit
-
-    // Đơn vị thể tích → container (chai, lít, l)
-    const mlValue = this.toMl(qty, ru)
-    if (mlValue !== null && ['chai', 'lít', 'lit', 'l', 'ml'].includes(su)) {
-      const stockMlPerUnit = su === 'ml' ? 1 : usagePerUnit
-      return mlValue / stockMlPerUnit
-    }
-
-    // Đơn vị khối lượng → container (kg, g, hộp, gói)
-    const gValue = this.toGram(qty, ru)
-    if (gValue !== null && ['kg', 'g', 'hộp', 'gói', 'lon'].includes(su)) {
-      const stockGPerUnit = su === 'g' ? 1 : usagePerUnit
-      return gValue / stockGPerUnit
-    }
-
-    // Đơn vị đếm (viên, cái, trái, lá, vá, muỗng…) → chia usagePerUnit
-    return qty / usagePerUnit
-  }
-
-  private toMl(qty: number, unit: string): number | null {
-    switch (unit) {
-      case 'ml': return qty
-      case 'lít': case 'lit': case 'l': return qty * 1000
-      case 'muỗng': return qty * 5     // 1 muỗng cà phê ≈ 5 ml
-      case 'vá': return qty * 50       // 1 vá topping ≈ 50 ml
-      default: return null
-    }
-  }
-
-  private toGram(qty: number, unit: string): number | null {
-    switch (unit) {
-      case 'g': return qty
-      case 'kg': return qty * 1000
-      case 'muỗng': return qty * 5     // 1 muỗng ≈ 5 g
-      default: return null
     }
   }
 

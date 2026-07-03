@@ -25,6 +25,26 @@ export class ShiftsController {
     return this.shiftsService.remove(id)
   }
 
+  @Get('requests')
+  requests(@Query() query: Record<string, string | undefined>) {
+    return this.shiftsService.requests(query)
+  }
+
+  @Post('requests')
+  createRequest(@Body() body: Record<string, unknown>) {
+    return this.shiftsService.createRequest(body)
+  }
+
+  @Patch('requests/:id/approve')
+  approveRequest(@Param('id') id: string) {
+    return this.shiftsService.approveRequest(id)
+  }
+
+  @Patch('requests/:id/reject')
+  rejectRequest(@Param('id') id: string, @Body() body: { reason?: string }) {
+    return this.shiftsService.rejectRequest(id, body.reason ?? '')
+  }
+
   @Get('assignments')
   assignments(@Query() query: Record<string, string | undefined>) {
     return this.shiftsService.assignments(query)

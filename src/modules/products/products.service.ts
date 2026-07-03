@@ -85,6 +85,21 @@ export class ProductsService {
     return { deleted: true }
   }
 
+  // Đánh dấu món tạm hết trong ngày (86 list) — hết hiệu lực tự động khi qua ngày (giờ VN)
+  async setSoldOut(id: string, soldOut: boolean) {
+    return this.prisma.product.update({
+      where: { id },
+      data: { soldOutUntil: soldOut ? this.endOfTodayVN() : null },
+      include: { category: true },
+    })
+  }
+
+  private endOfTodayVN() {
+    // 23:59:59.999 giờ VN (UTC+7) = 16:59:59.999 UTC cùng ngày VN
+    const vnNow = new Date(Date.now() + 7 * 60 * 60 * 1000)
+    return new Date(Date.UTC(vnNow.getUTCFullYear(), vnNow.getUTCMonth(), vnNow.getUTCDate(), 16, 59, 59, 999))
+  }
+
   async getRecipes(productId: string) {
     return this.prisma.productRecipe.findMany({
       where: { productId },

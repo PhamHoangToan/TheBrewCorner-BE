@@ -284,7 +284,27 @@ export class PayrollService {
   }
 
   async approve(id: string) {
-    return this.prisma.payroll.update({ where: { id }, data: { status: 'APPROVED' } })
+    const payroll = await this.prisma.payroll.update({
+      where: { id },
+      data: { status: 'APPROVED' },
+      include: { user: { select: { id: true, role: true } } },
+    })
+    await this.notifications.send({
+      role: this.notifRole(payroll.user.role),
+      userId: payroll.user.id,
+      title: 'Bảng lương đã được duyệt',
+      body: `Bảng lương tháng ${payroll.periodMonth}/${payroll.periodYear} của bạn đã được duyệt`,
+      type: 'PAYROLL_APPROVED',
+      refId: payroll.id,
+    })
+    return payroll
+  }
+
+  private notifRole(role: string): 'admin' | 'cashier' | 'barista' | 'waiter' {
+    const map: Record<string, 'admin' | 'cashier' | 'barista' | 'waiter'> = {
+      ADMIN: 'admin', CASHIER: 'cashier', BARISTA: 'barista', WAITER: 'waiter',
+    }
+    return map[role] ?? 'waiter'
   }
 
   async markPaid(id: string) {

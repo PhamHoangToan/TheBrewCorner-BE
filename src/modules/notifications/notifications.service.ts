@@ -20,6 +20,14 @@ export type NotifType =
   | 'STOCK_FORECAST'
   | 'PAYROLL_READY'
   | 'RESERVATION_NEW'
+  | 'LEAVE_APPROVED'
+  | 'LEAVE_REJECTED'
+  | 'SHIFT_ASSIGNED'
+  | 'SHIFT_REQUEST_APPROVED'
+  | 'SHIFT_REQUEST_REJECTED'
+  | 'CORRECTION_APPROVED'
+  | 'CORRECTION_REJECTED'
+  | 'PAYROLL_APPROVED'
 
 interface SendParams {
   role: NotifRole | NotifRole[]
@@ -27,6 +35,8 @@ interface SendParams {
   body: string
   type: NotifType
   refId?: string
+  // Thông báo cá nhân (duyệt nghỉ phép, phân ca...) — chỉ user này thấy, không phát cho cả role
+  userId?: string
 }
 
 @Injectable()
@@ -43,29 +53,51 @@ export class NotificationsService {
         const notif = await this.prisma.notification.create({
           data: {
             role,
+            userId: params.userId ?? null,
             title: params.title,
             body: params.body,
             type: params.type,
             refId: params.refId ?? null,
           },
         })
-        this.gateway.server.to(`role:${role}`).emit('notification:new', notif)
+        // Thông báo cá nhân không phát lên socket theo role — mobile app lấy qua polling
+        if (!params.userId) {
+          this.gateway.server.to(`role:${role}`).emit('notification:new', notif)
+        }
       } catch (err) {
         console.error(`[Notification] Failed to send to ${role}:`, (err as any)?.message ?? err)
       }
     }
   }
 
+  // Chuông thông báo web nội bộ — chỉ thông báo chung theo role, không lộ thông báo cá nhân
   async findByRole(role: string, page = 1, limit = 20) {
     const skip = (page - 1) * limit
+    const where = { role, userId: null }
     const [items, total] = await this.prisma.$transaction([
       this.prisma.notification.findMany({
-        where: { role },
+        where,
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
       }),
-      this.prisma.notification.count({ where: { role } }),
+      this.prisma.notification.count({ where }),
+    ])
+    return { items, total, page, limit }
+  }
+
+  // Màn hình thông báo app Employee — thông báo cá nhân của đúng user
+  async findByUser(userId: string, page = 1, limit = 20) {
+    const skip = (page - 1) * limit
+    const where = { userId }
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.notification.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.notification.count({ where }),
     ])
     return { items, total, page, limit }
   }
@@ -74,13 +106,15 @@ export class NotificationsService {
     return this.prisma.notification.update({ where: { id }, data: { read: true } })
   }
 
-  async markAllRead(role: string) {
-    await this.prisma.notification.updateMany({ where: { role, read: false }, data: { read: true } })
+  async markAllRead(filter: { role?: string; userId?: string }) {
+    const where = filter.userId ? { userId: filter.userId, read: false } : { role: filter.role, userId: null, read: false }
+    await this.prisma.notification.updateMany({ where, data: { read: true } })
     return { success: true }
   }
 
-  async countUnread(role: string) {
-    const count = await this.prisma.notification.count({ where: { role, read: false } })
+  async countUnread(filter: { role?: string; userId?: string }) {
+    const where = filter.userId ? { userId: filter.userId, read: false } : { role: filter.role, userId: null, read: false }
+    const count = await this.prisma.notification.count({ where })
     return { count }
   }
 

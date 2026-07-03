@@ -3,10 +3,18 @@ import { PrismaService } from '../../prisma/prisma.service'
 import { pagination, QueryParams } from '../../common/crud.types'
 import { mentionsPaidLeave } from '../../common/leave-note.util'
 import { datesInRange } from '../../common/date.util'
+import { NotificationsService, NotifRole } from '../notifications/notifications.service'
+
+const ROLE_TO_NOTIF: Record<string, NotifRole> = {
+  ADMIN: 'admin', CASHIER: 'cashier', BARISTA: 'barista', WAITER: 'waiter',
+}
 
 @Injectable()
 export class LeaveRequestsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   async create(body: { userId: string; startDate: string; endDate: string; type: string; reason: string }) {
     return this.prisma.leaveRequest.create({
@@ -74,10 +82,20 @@ export class LeaveRequestsService {
       })
     }
 
-    return this.prisma.leaveRequest.update({
+    const approved = await this.prisma.leaveRequest.update({
       where: { id },
       data: { status: 'APPROVED', decidedAt: new Date() },
+      include: { user: { select: { id: true, role: true } } },
     })
+    await this.notifications.send({
+      role: ROLE_TO_NOTIF[approved.user.role] ?? 'waiter',
+      userId: approved.user.id,
+      title: 'Đơn nghỉ phép được duyệt',
+      body: `Đơn nghỉ từ ${approved.startDate.toLocaleDateString('vi-VN')} đến ${approved.endDate.toLocaleDateString('vi-VN')} đã được chấp nhận`,
+      type: 'LEAVE_APPROVED',
+      refId: approved.id,
+    })
+    return approved
   }
 
   async reject(id: string, reason: string) {
@@ -85,10 +103,20 @@ export class LeaveRequestsService {
     if (!request) throw new NotFoundException('Không tìm thấy đơn nghỉ phép')
     if (request.status !== 'PENDING') throw new BadRequestException('Đơn đã được xử lý')
 
-    return this.prisma.leaveRequest.update({
+    const rejected = await this.prisma.leaveRequest.update({
       where: { id },
       data: { status: 'REJECTED', rejectReason: reason, decidedAt: new Date() },
+      include: { user: { select: { id: true, role: true } } },
     })
+    await this.notifications.send({
+      role: ROLE_TO_NOTIF[rejected.user.role] ?? 'waiter',
+      userId: rejected.user.id,
+      title: 'Đơn nghỉ phép bị từ chối',
+      body: reason ? `Lý do: ${reason}` : 'Đơn nghỉ phép của bạn không được chấp nhận',
+      type: 'LEAVE_REJECTED',
+      refId: rejected.id,
+    })
+    return rejected
   }
 
   private leaveTypeLabel(type: string): string {

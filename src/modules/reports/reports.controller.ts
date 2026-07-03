@@ -34,4 +34,9 @@ export class ReportsController {
   sales(@Query() query: DateRangeQuery) {
     return this.reportsService.sales(query)
   }
+
+  @Get('profit')
+  profit(@Query() query: DateRangeQuery) {
+    return this.reportsService.profit(query)
+  }
 }

@@ -1,10 +1,9 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
 import { MembershipTier, PaymentMethod } from '@prisma/client'
 import { PrismaService } from '../../prisma/prisma.service'
 import { pagination, QueryParams } from '../../common/crud.types'
+import { POINTS_PER_VND, redeemLoyaltyPoints } from '../../common/loyalty.util'
 import { NotificationsService } from '../notifications/notifications.service'
-
-const POINTS_PER_VND = 1 / 10000 // 10.000đ chi tiêu = 1 điểm
 const TIER_THRESHOLDS: Array<{ tier: MembershipTier; minSpent: number }> = [
   { tier: 'GOLD', minSpent: 10_000_000 },
   { tier: 'SILVER', minSpent: 2_000_000 },
@@ -51,6 +50,19 @@ export class InvoicesService {
     if (!order) throw new NotFoundException('Order not found')
     if ((order as any).invoice?.status === 'PAID') {
       throw new ConflictException('Order này đã được thanh toán rồi')
+    }
+
+    // Cashier áp dụng đổi điểm: FE đã trừ redeemValue vào discountAmount/totalAmount,
+    // BE trừ điểm + ghi giao dịch REDEEM (chặn dùng 2 lần cho cùng order)
+    const redeemPoints = Math.max(0, Math.floor(Number(body.redeemPoints ?? 0)))
+    if (redeemPoints > 0) {
+      if (!order.customerId) throw new BadRequestException('Order không gắn với khách hàng thành viên')
+      await redeemLoyaltyPoints(this.prisma, {
+        userId: order.customerId,
+        orderId: order.id,
+        orderCode: order.code,
+        points: redeemPoints,
+      })
     }
 
     return this.prisma.invoice.upsert({
