@@ -93,9 +93,10 @@ export class ActivityLogInterceptor implements NestInterceptor {
 
   private async log(req: any, method: string, path: string, controllerName: string, handlerName: string, statusCode: number) {
     try {
+      // RolesGuard (chạy trước interceptor) đã gắn req.user từ JWT. Fallback token dev cũ để tương thích.
       const authHeader = String(req.headers?.authorization ?? '')
       const token = authHeader.replace(/^Bearer\s+/i, '')
-      const userId = token.startsWith('dev-token-') ? token.replace('dev-token-', '') : null
+      const userId = req.user?.id ?? (token.startsWith('dev-token-') ? token.replace('dev-token-', '') : null)
 
       let userName: string | null = null
       let userRole: string | null = null

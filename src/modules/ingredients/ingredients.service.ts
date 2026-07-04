@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service'
 import { money, pagination, QueryParams } from '../../common/crud.types'
 import { LowStockJob } from '../jobs/low-stock.job'
 import { SuppliersService } from '../suppliers/suppliers.service'
+import { consumeBatchesFEFO } from '../../common/stock-batch.util'
 
 @Injectable()
 export class IngredientsService {
@@ -145,6 +146,31 @@ export class IngredientsService {
     })
   }
 
+  // Lô nguyên liệu sắp/đã hết hạn (còn hàng) — cảnh báo HSD
+  async expiring(days = 7) {
+    const until = new Date(Date.now() + days * 24 * 60 * 60 * 1000)
+    const batches = await this.prisma.stockBatch.findMany({
+      where: { quantity: { gt: 0 }, expiryDate: { lte: until } },
+      include: { ingredient: { select: { name: true, unit: true, code: true } } },
+      orderBy: { expiryDate: 'asc' },
+    })
+    const startOfToday = new Date()
+    startOfToday.setHours(0, 0, 0, 0)
+    return batches.map((b) => {
+      const daysLeft = Math.round((new Date(b.expiryDate).getTime() - startOfToday.getTime()) / (24 * 60 * 60 * 1000))
+      return {
+        id: b.id,
+        ingredientName: b.ingredient?.name ?? '',
+        code: b.ingredient?.code ?? '',
+        unit: b.ingredient?.unit ?? '',
+        quantity: Number(b.quantity),
+        expiryDate: b.expiryDate,
+        daysLeft,
+        expired: daysLeft < 0,
+      }
+    })
+  }
+
   async stockImports(query: QueryParams) {
     const { skip, take, page, limit } = pagination(query)
     const [items, total] = await this.prisma.$transaction([
@@ -213,6 +239,20 @@ export class IngredientsService {
           where: { id: ingredient.id },
           data: { stockQuantity: { increment: quantity } },
         })
+
+        // Tạo lô theo hạn dùng nếu phiếu nhập có HSD (để cảnh báo HSD + xuất FEFO)
+        const expiry = item.expiryDate ?? item.hsd ?? item.hanSuDung
+        if (expiry) {
+          await tx.stockBatch.create({
+            data: {
+              ingredientId: ingredient.id,
+              stockImportId: doc.id,
+              initialQty: quantity,
+              quantity,
+              expiryDate: new Date(expiry),
+            },
+          })
+        }
       }
 
       return tx.stockImport.findUnique({ where: { id: doc.id }, include: { items: true } })
@@ -262,6 +302,8 @@ export class IngredientsService {
           where: { id: ingredient.id },
           data: { stockQuantity: { decrement: quantity } },
         })
+        // Trừ lô theo FEFO (hết hạn sớm dùng trước)
+        await consumeBatchesFEFO(tx, ingredient.id, quantity)
       }
 
       return tx.stockExport.findUnique({ where: { id: doc.id }, include: { items: true } })

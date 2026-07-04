@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common'
 import { PrismaService } from '../../prisma/prisma.service'
 import { NotificationsGateway } from './notifications.gateway'
+import { PushService } from '../push/push.service'
 
 export type NotifRole = 'admin' | 'cashier' | 'barista' | 'waiter'
 export type NotifType =
@@ -44,6 +45,7 @@ export class NotificationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly gateway: NotificationsGateway,
+    private readonly push: PushService,
   ) {}
 
   async send(params: SendParams) {
@@ -67,6 +69,10 @@ export class NotificationsService {
       } catch (err) {
         console.error(`[Notification] Failed to send to ${role}:`, (err as any)?.message ?? err)
       }
+    }
+    // Thông báo cá nhân → đẩy FCM tới thiết bị của user (best-effort)
+    if (params.userId) {
+      this.push.sendToUser(params.userId, params.title, params.body, { type: params.type, refId: params.refId ?? '' }).catch(() => {})
     }
   }
 

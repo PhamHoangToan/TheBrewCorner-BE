@@ -155,6 +155,125 @@ export class ReportsService {
     }
   }
 
+  // Báo cáo cuối ngày (Z-report): doanh thu theo phương thức thanh toán, hoàn tiền,
+  // và các ca quỹ đã chốt trong ngày.
+  async zReport(query: { date?: string }) {
+    const day = query.date ? new Date(`${query.date}T00:00:00`) : new Date()
+    const from = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, 0, 0, 0)
+    const to = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 23, 59, 59, 999)
+
+    const [payments, refunds, sessions] = await Promise.all([
+      this.prisma.invoicePayment.groupBy({
+        by: ['method'],
+        _sum: { amount: true },
+        _count: true,
+        where: { paidAt: { gte: from, lte: to } },
+      }),
+      this.prisma.invoiceRefund.aggregate({
+        _sum: { amount: true },
+        _count: true,
+        where: { createdAt: { gte: from, lte: to } },
+      }),
+      this.prisma.cashSession.findMany({
+        where: { OR: [{ closedAt: { gte: from, lte: to } }, { status: 'OPEN', openedAt: { gte: from, lte: to } }] },
+        include: { user: { select: { name: true, code: true } } },
+        orderBy: { openedAt: 'asc' },
+      }),
+    ])
+
+    const byMethod = payments.map((p) => ({
+      method: p.method,
+      count: p._count,
+      amount: parseFloat(String(p._sum.amount ?? 0)) || 0,
+    }))
+    const grossRevenue = byMethod.reduce((s, m) => s + m.amount, 0)
+    const totalRefund = parseFloat(String(refunds._sum.amount ?? 0)) || 0
+
+    return {
+      date: from,
+      byMethod,
+      grossRevenue,
+      totalRefund,
+      refundCount: refunds._count,
+      netRevenue: grossRevenue - totalRefund,
+      cashSessions: sessions.map((s) => ({
+        id: s.id,
+        cashier: s.user?.name ?? s.userId,
+        status: s.status,
+        openingFloat: parseFloat(String(s.openingFloat)) || 0,
+        expectedCash: s.expectedCash != null ? parseFloat(String(s.expectedCash)) : null,
+        countedCash: s.countedCash != null ? parseFloat(String(s.countedCash)) : null,
+        difference: s.difference != null ? parseFloat(String(s.difference)) : null,
+        openedAt: s.openedAt,
+        closedAt: s.closedAt,
+      })),
+    }
+  }
+
+  // Báo cáo hao hụt/đổ bỏ (xuất kho lý do DAMAGED/EXPIRED) — giá trị = SL × giá nhập gần nhất
+  async waste(query: { startDate?: string; endDate?: string }) {
+    const range = this.dateRange(query)
+    const items = await this.prisma.stockExportItem.groupBy({
+      by: ['ingredientId', 'ingredientName'],
+      _sum: { quantity: true },
+      where: {
+        stockExport: {
+          reason: { in: ['DAMAGED', 'EXPIRED'] },
+          ...(range ? { exportDate: range } : {}),
+        },
+      },
+    })
+
+    const rows = await Promise.all(
+      items.map(async (it) => {
+        const lastImport = await this.prisma.stockImportItem.findFirst({
+          where: { ingredientId: it.ingredientId },
+          orderBy: { stockImport: { importDate: 'desc' } },
+          select: { unitPrice: true },
+        })
+        const quantity = Number(it._sum.quantity ?? 0)
+        const unitPrice = Number(lastImport?.unitPrice ?? 0)
+        return {
+          ingredientId: it.ingredientId,
+          ingredientName: it.ingredientName,
+          quantity,
+          unitPrice,
+          cost: Math.round(quantity * unitPrice),
+        }
+      }),
+    )
+    rows.sort((a, b) => b.cost - a.cost)
+    return { items: rows, totalCost: rows.reduce((s, r) => s + r.cost, 0) }
+  }
+
+  // Hiệu suất nhân viên (thu ngân): số hóa đơn + doanh thu trong kỳ
+  async staffPerformance(query: { startDate?: string; endDate?: string }) {
+    const range = this.dateRange(query)
+    const grouped = await this.prisma.invoice.groupBy({
+      by: ['cashierId'],
+      _count: true,
+      _sum: { totalAmount: true },
+      where: { status: 'PAID', cashierId: { not: null }, ...(range ? { paidAt: range } : {}) },
+    })
+    const rows = await Promise.all(
+      grouped.map(async (g) => {
+        const user = g.cashierId
+          ? await this.prisma.user.findUnique({ where: { id: g.cashierId }, select: { name: true, code: true, role: true } })
+          : null
+        return {
+          userId: g.cashierId,
+          name: user?.name ?? '—',
+          code: user?.code ?? '',
+          role: user?.role ?? '',
+          invoiceCount: g._count,
+          revenue: parseFloat(String(g._sum.totalAmount ?? 0)) || 0,
+        }
+      }),
+    )
+    rows.sort((a, b) => b.revenue - a.revenue)
+    return rows
+  }
+
   private dateRange(query: { startDate?: string; endDate?: string }) {
     if (!query.startDate && !query.endDate) return undefined
     const gte = query.startDate ? new Date(`${query.startDate}T00:00:00`) : undefined

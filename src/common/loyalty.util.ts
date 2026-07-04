@@ -49,6 +49,59 @@ export const redeemLoyaltyPoints = async (
   return points
 }
 
+// Ngưỡng hạng thành viên theo tổng chi tiêu lũy kế
+const TIER_THRESHOLDS: Array<{ tier: string; minSpent: number }> = [
+  { tier: 'GOLD', minSpent: 10_000_000 },
+  { tier: 'SILVER', minSpent: 2_000_000 },
+  { tier: 'BASIC', minSpent: 0 },
+]
+export const membershipTierForSpent = (totalSpent: number): string =>
+  TIER_THRESHOLDS.find((t) => totalSpent >= t.minSpent)?.tier ?? 'BASIC'
+
+// Đảo ngược điểm khi HOÀN TIỀN toàn bộ 1 đơn (idempotent):
+//  - hoàn lại điểm khách đã đổi (REDEEM) — nếu có
+//  - thu hồi điểm khách đã tích (EARN) + trừ totalSpent + hạ hạng nếu cần
+export const reverseLoyaltyForRefund = async (
+  prisma: PrismaService,
+  params: { orderId: string; refundAmount: number },
+) => {
+  await refundRedeemedPoints(prisma, params.orderId)
+
+  const earn = await prisma.loyaltyTransaction.findFirst({
+    where: { orderId: params.orderId, type: 'EARN' },
+  })
+  if (!earn) return
+
+  const already = await prisma.loyaltyTransaction.findFirst({
+    where: { orderId: params.orderId, type: 'ADJUST', description: { startsWith: 'Thu hồi điểm' } },
+  })
+  if (already) return
+
+  const user = await prisma.user.findFirst({ where: { id: earn.userId } })
+  if (!user) return
+
+  const points = earn.points // dương
+  const newPoints = Math.max(0, user.loyaltyPoints - points)
+  const newSpent = Math.max(0, parseFloat(String(user.totalSpent)) - params.refundAmount)
+  const newTier = membershipTierForSpent(newSpent)
+
+  await prisma.$transaction([
+    prisma.user.update({
+      where: { id: user.id },
+      data: { loyaltyPoints: newPoints, totalSpent: newSpent, membershipTier: newTier as any },
+    }),
+    prisma.loyaltyTransaction.create({
+      data: {
+        userId: user.id,
+        orderId: params.orderId,
+        points: -points,
+        type: 'ADJUST',
+        description: 'Thu hồi điểm do hoàn tiền đơn',
+      },
+    }),
+  ])
+}
+
 // Hoàn điểm đã dùng khi order bị hủy (idempotent — gọi nhiều lần chỉ hoàn 1 lần)
 export const refundRedeemedPoints = async (prisma: PrismaService, orderId: string) => {
   const redeem = await prisma.loyaltyTransaction.findFirst({ where: { orderId, type: 'REDEEM' } })

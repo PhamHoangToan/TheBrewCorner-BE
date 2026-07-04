@@ -6,6 +6,8 @@ import { NotificationsService } from '../notifications/notifications.service'
 import { LowStockJob } from '../jobs/low-stock.job'
 import { InvoicesService } from '../invoices/invoices.service'
 import { VouchersService } from '../vouchers/vouchers.service'
+import { PromotionsService } from '../promotions/promotions.service'
+import { WalletService } from '../wallet/wallet.service'
 
 describe('OrdersService', () => {
   let service: OrdersService
@@ -22,9 +24,9 @@ describe('OrdersService', () => {
           useValue: {
             order: {
               findMany: jest.fn(), findFirst: jest.fn(), findUnique: jest.fn(),
-              create: jest.fn(), update: jest.fn(), count: jest.fn(),
+              create: jest.fn(), update: jest.fn(), updateMany: jest.fn(), count: jest.fn(),
             },
-            orderItem: { findMany: jest.fn(), findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
+            orderItem: { findMany: jest.fn(), findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn(), createMany: jest.fn() },
             product: { findMany: jest.fn() },
             category: { upsert: jest.fn() },
             cafeTable: { update: jest.fn(), findFirst: jest.fn(), create: jest.fn() },
@@ -42,6 +44,8 @@ describe('OrdersService', () => {
         { provide: LowStockJob, useValue: { checkSpecificIngredients: jest.fn() } },
         { provide: InvoicesService, useValue: { create: jest.fn(), pay: jest.fn() } },
         { provide: VouchersService, useValue: { validate: jest.fn(), consume: jest.fn() } },
+        { provide: PromotionsService, useValue: { validate: jest.fn() } },
+        { provide: WalletService, useValue: { getOrCreate: jest.fn(), debit: jest.fn() } },
       ],
     }).compile()
 
@@ -53,6 +57,68 @@ describe('OrdersService', () => {
 
   const product = (overrides: Partial<any> = {}) => ({
     id: 'p1', code: 'p1', name: 'Cà phê sữa', price: 30000, soldOutUntil: null, ...overrides,
+  })
+
+  describe('addItems — thêm món vào order đang mở', () => {
+    it('báo lỗi nếu không có món', async () => {
+      await expect(service.addItems('o1', [])).rejects.toThrow(BadRequestException)
+    })
+
+    it('báo lỗi NotFoundException nếu order không tồn tại', async () => {
+      prisma.order.findFirst.mockResolvedValue(null)
+      await expect(service.addItems('o1', [{ productId: 'p1', quantity: 1 }])).rejects.toThrow(NotFoundException)
+    })
+
+    it('báo lỗi nếu order đã thanh toán (phải tạo order mới)', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'o1', status: 'SERVED', invoice: { status: 'PAID' }, table: null })
+      await expect(service.addItems('o1', [{ productId: 'p1', quantity: 1 }])).rejects.toThrow(BadRequestException)
+    })
+
+    it('báo lỗi nếu order đã hủy', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'o1', status: 'CANCELLED', invoice: null, table: null })
+      await expect(service.addItems('o1', [{ productId: 'p1', quantity: 1 }])).rejects.toThrow(BadRequestException)
+    })
+
+    it('chặn thêm món đang báo hết hàng trong ngày', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'o1', status: 'PREPARING', invoice: null, table: null, discountAmount: 0 })
+      const future = new Date(Date.now() + 60 * 60 * 1000)
+      prisma.product.findMany.mockResolvedValue([product({ soldOutUntil: future })])
+      await expect(service.addItems('o1', [{ productId: 'p1', quantity: 1 }])).rejects.toThrow(BadRequestException)
+      expect(prisma.orderItem.createMany).not.toHaveBeenCalled()
+    })
+
+    it('thêm món + tính lại tổng, giữ nguyên status khi order đang PREPARING', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'o1', status: 'PREPARING', invoice: null, table: { name: '04' }, discountAmount: 0 })
+      prisma.product.findMany.mockResolvedValue([product()])
+      prisma.orderItem.createMany.mockResolvedValue({ count: 1 })
+      prisma.orderItem.findMany.mockResolvedValue([{ totalPrice: '30000' }, { totalPrice: '30000' }])
+      prisma.order.update.mockResolvedValue({})
+      jest.spyOn(service, 'findOne').mockResolvedValue({ id: 'o1' } as any)
+
+      await service.addItems('o1', [{ productId: 'p1', quantity: 1, price: 30000 }])
+
+      expect(prisma.orderItem.createMany).toHaveBeenCalled()
+      expect(prisma.order.update).toHaveBeenCalledWith({
+        where: { id: 'o1' },
+        data: { subtotal: 60000, totalAmount: 60000 },
+      })
+    })
+
+    it('order đã SERVED (barista làm xong) mà thêm món → hồi sinh về SENT để barista thấy lại', async () => {
+      prisma.order.findFirst.mockResolvedValue({ id: 'o1', status: 'SERVED', invoice: null, table: { name: '04' }, discountAmount: 0 })
+      prisma.product.findMany.mockResolvedValue([product()])
+      prisma.orderItem.createMany.mockResolvedValue({ count: 1 })
+      prisma.orderItem.findMany.mockResolvedValue([{ totalPrice: '30000' }])
+      prisma.order.update.mockResolvedValue({})
+      jest.spyOn(service, 'findOne').mockResolvedValue({ id: 'o1' } as any)
+
+      await service.addItems('o1', [{ productId: 'p1', quantity: 1, price: 30000 }])
+
+      expect(prisma.order.update).toHaveBeenCalledWith({
+        where: { id: 'o1' },
+        data: { subtotal: 30000, totalAmount: 30000, status: 'SENT' },
+      })
+    })
   })
 
   describe('create — 86 list (món hết hàng trong ngày)', () => {
@@ -335,6 +401,75 @@ describe('OrdersService', () => {
       })
       expect(result.splitOrder).toEqual({ id: 'o2', items: [], table: null })
     })
+
+    it('báo lỗi nếu bàn được chọn cho order mới không tồn tại', async () => {
+      prisma.order.findFirst.mockResolvedValueOnce({
+        id: 'o1', code: 'ORD-1', status: 'SERVED', invoice: null,
+        tableId: 't1', items: [{ id: 'item-1', status: 'SERVED' }, { id: 'item-2', status: 'SERVED' }],
+      })
+      prisma.cafeTable.findFirst.mockResolvedValue(null)
+
+      await expect(service.split('o1', ['item-1'], 't-missing')).rejects.toThrow(BadRequestException)
+      expect(prisma.order.create).not.toHaveBeenCalled()
+    })
+
+    it('báo lỗi nếu bàn được chọn không còn trống', async () => {
+      prisma.order.findFirst.mockResolvedValueOnce({
+        id: 'o1', code: 'ORD-1', status: 'SERVED', invoice: null,
+        tableId: 't1', items: [{ id: 'item-1', status: 'SERVED' }, { id: 'item-2', status: 'SERVED' }],
+      })
+      prisma.cafeTable.findFirst.mockResolvedValue({ id: 't2', status: 'SERVING' })
+
+      await expect(service.split('o1', ['item-1'], 't2')).rejects.toThrow(BadRequestException)
+      expect(prisma.order.create).not.toHaveBeenCalled()
+    })
+
+    it('tách sang bàn khác (đang trống): order mới gắn bàn mới, set bàn đó SERVING', async () => {
+      prisma.order.findFirst
+        .mockResolvedValueOnce({
+          id: 'o1', code: 'ORD-1', status: 'SERVED', invoice: null, type: 'DINE_IN',
+          tableId: 't1', createdById: 'u1', customerId: null,
+          items: [{ id: 'item-1', status: 'SERVED' }, { id: 'item-2', status: 'SERVED' }],
+        })
+        .mockResolvedValueOnce({ id: 'o1', items: [], table: null, invoice: null })
+      prisma.cafeTable.findFirst.mockResolvedValue({ id: 't2', status: 'AVAILABLE' })
+      prisma.order.create.mockResolvedValue({ id: 'o2', code: 'ORD-2' })
+      prisma.orderItem.updateMany.mockResolvedValue({ count: 1 })
+      prisma.orderItem.findMany.mockResolvedValue([{ totalPrice: '15000' }])
+      prisma.order.update.mockResolvedValue({})
+      prisma.cafeTable.update.mockResolvedValue({})
+      prisma.order.findUnique.mockResolvedValue({ id: 'o2', items: [], table: null })
+
+      await service.split('o1', ['item-1'], 't2')
+
+      expect(prisma.order.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ tableId: 't2' }),
+      }))
+      expect(prisma.cafeTable.update).toHaveBeenCalledWith({ where: { id: 't2' }, data: { status: 'SERVING' } })
+    })
+
+    it('không chọn bàn khác (targetTableId trùng bàn gốc hoặc bỏ trống) → giữ nguyên bàn gốc, không đụng cafeTable', async () => {
+      prisma.order.findFirst
+        .mockResolvedValueOnce({
+          id: 'o1', code: 'ORD-1', status: 'SERVED', invoice: null, type: 'DINE_IN',
+          tableId: 't1', createdById: 'u1', customerId: null,
+          items: [{ id: 'item-1', status: 'SERVED' }, { id: 'item-2', status: 'SERVED' }],
+        })
+        .mockResolvedValueOnce({ id: 'o1', items: [], table: null, invoice: null })
+      prisma.order.create.mockResolvedValue({ id: 'o2', code: 'ORD-2' })
+      prisma.orderItem.updateMany.mockResolvedValue({ count: 1 })
+      prisma.orderItem.findMany.mockResolvedValue([{ totalPrice: '15000' }])
+      prisma.order.update.mockResolvedValue({})
+      prisma.order.findUnique.mockResolvedValue({ id: 'o2', items: [], table: null })
+
+      await service.split('o1', ['item-1'], 't1')
+
+      expect(prisma.order.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ tableId: 't1' }),
+      }))
+      expect(prisma.cafeTable.update).not.toHaveBeenCalled()
+      expect(prisma.cafeTable.findFirst).not.toHaveBeenCalled()
+    })
   })
 
   describe('merge — gộp bàn/order', () => {
@@ -383,6 +518,11 @@ describe('OrdersService', () => {
         data: expect.objectContaining({ status: 'CANCELLED' }),
       }))
       expect(prisma.cafeTable.update).toHaveBeenCalledWith({ where: { id: 't2' }, data: { status: 'AVAILABLE' } })
+      // Gỡ tableId order còn lại của bàn nguồn để không sống lại phiên sau
+      expect(prisma.order.updateMany).toHaveBeenCalledWith({
+        where: { tableId: 't2', status: { not: 'CANCELLED' }, deletedAt: null },
+        data: { tableId: null },
+      })
       expect(result).toEqual({ id: 'o1' })
       findOneSpy.mockRestore()
     })
@@ -400,6 +540,39 @@ describe('OrdersService', () => {
       await service.merge('o1', 'o2')
 
       expect(prisma.cafeTable.update).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('selfOrder — khách tự gọi món tại bàn qua QR', () => {
+    it('báo lỗi nếu bàn không tồn tại', async () => {
+      prisma.cafeTable.findFirst.mockResolvedValue(null)
+      await expect(service.selfOrder('t1', { items: [{ productId: 'p1', quantity: 1 }] }))
+        .rejects.toThrow(NotFoundException)
+    })
+
+    it('báo lỗi nếu chưa chọn món', async () => {
+      prisma.cafeTable.findFirst.mockResolvedValue({ id: 't1', name: 'Bàn 1' })
+      await expect(service.selfOrder('t1', { items: [] })).rejects.toThrow(BadRequestException)
+    })
+
+    it('bàn có order đang mở (chưa thanh toán) → thêm món vào order đó', async () => {
+      prisma.cafeTable.findFirst.mockResolvedValue({ id: 't1', name: 'Bàn 1' })
+      prisma.order.findMany.mockResolvedValue([{ id: 'o1', status: 'SENT', invoice: null }])
+      const addItems = jest.spyOn(service, 'addItems').mockResolvedValue({ id: 'o1' } as any)
+
+      await service.selfOrder('t1', { items: [{ productId: 'p1', quantity: 2 }] })
+
+      expect(addItems).toHaveBeenCalledWith('o1', [{ productId: 'p1', quantity: 2 }])
+    })
+
+    it('bàn không có order đang mở → tạo order DINE_IN mới', async () => {
+      prisma.cafeTable.findFirst.mockResolvedValue({ id: 't1', name: 'Bàn 1' })
+      prisma.order.findMany.mockResolvedValue([{ id: 'o-paid', status: 'SERVED', invoice: { status: 'PAID' } }])
+      const create = jest.spyOn(service, 'create').mockResolvedValue({ id: 'o2' } as any)
+
+      await service.selfOrder('t1', { items: [{ productId: 'p1', quantity: 1 }], customerId: 'c1' })
+
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ tableId: 't1', type: 'DINE_IN', customerId: 'c1' }))
     })
   })
 })

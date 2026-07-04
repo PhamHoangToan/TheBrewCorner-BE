@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common'
 import { Test, TestingModule } from '@nestjs/testing'
 import { InvoicesService } from './invoices.service'
 import { PrismaService } from '../../prisma/prisma.service'
@@ -36,6 +37,8 @@ describe('InvoicesService — pay()', () => {
       cafeTable: { update: jest.fn().mockResolvedValue({}) },
       loyaltyTransaction: { create: jest.fn().mockResolvedValue({}) },
       user: { update: jest.fn() },
+      invoiceRefund: { create: jest.fn().mockResolvedValue({ id: 'refund-1' }) },
+      financeTransaction: { create: jest.fn().mockResolvedValue({}) },
     }
 
     const module: TestingModule = await Test.createTestingModule({
@@ -44,7 +47,7 @@ describe('InvoicesService — pay()', () => {
         {
           provide: PrismaService,
           useValue: {
-            invoice: { findUnique: jest.fn() },
+            invoice: { findUnique: jest.fn(), findFirst: jest.fn().mockResolvedValue({ id: 'invoice-1' }) },
             invoicePayment: { findFirst: jest.fn() },
             $transaction: jest.fn((cb: any) => cb(tx)),
           },
@@ -223,5 +226,80 @@ describe('InvoicesService — pay()', () => {
 
       expect(tx.user.update).toHaveBeenCalledTimes(1)
     })
+  })
+})
+
+describe('InvoicesService — refund()', () => {
+  let service: InvoicesService
+  let prisma: any
+  let tx: any
+
+  const paidInvoice = (overrides: Partial<any> = {}) => ({
+    id: 'invoice-1',
+    code: 'HD-001',
+    orderId: 'order-1',
+    totalAmount: 100000,
+    status: 'PAID',
+    refunds: [],
+    order: { id: 'order-1', customerId: null },
+    ...overrides,
+  })
+
+  beforeEach(async () => {
+    tx = {
+      invoiceRefund: { create: jest.fn().mockResolvedValue({ id: 'refund-1' }) },
+      invoice: { update: jest.fn().mockResolvedValue({}) },
+      financeTransaction: { create: jest.fn().mockResolvedValue({}) },
+    }
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        InvoicesService,
+        {
+          provide: PrismaService,
+          useValue: {
+            invoice: { findUnique: jest.fn(), findFirst: jest.fn().mockResolvedValue({ id: 'invoice-1' }) },
+            $transaction: jest.fn((cb: any) => cb(tx)),
+          },
+        },
+        { provide: NotificationsService, useValue: { emitOrderUpdate: jest.fn() } },
+      ],
+    }).compile()
+    service = module.get(InvoicesService)
+    prisma = module.get(PrismaService)
+  })
+
+  it('từ chối hoàn nếu hóa đơn chưa thanh toán', async () => {
+    prisma.invoice.findUnique.mockResolvedValue(paidInvoice({ status: 'UNPAID' }))
+    await expect(service.refund('invoice-1', { amount: 10000, reason: 'x' })).rejects.toThrow(BadRequestException)
+  })
+
+  it('từ chối nếu số tiền hoàn vượt quá phần còn lại', async () => {
+    prisma.invoice.findUnique.mockResolvedValue(paidInvoice({ refunds: [{ amount: 90000 }] }))
+    await expect(service.refund('invoice-1', { amount: 20000, reason: 'x' })).rejects.toThrow(BadRequestException)
+  })
+
+  it('từ chối nếu thiếu lý do', async () => {
+    prisma.invoice.findUnique.mockResolvedValue(paidInvoice())
+    await expect(service.refund('invoice-1', { amount: 10000, reason: '  ' })).rejects.toThrow(BadRequestException)
+  })
+
+  it('hoàn toàn bộ → set REFUNDED + ghi phiếu chi', async () => {
+    prisma.invoice.findUnique.mockResolvedValue(paidInvoice())
+    await service.refund('invoice-1', { amount: 100000, reason: 'Khách đổi ý', method: 'CASH' })
+
+    expect(tx.invoiceRefund.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ invoiceId: 'invoice-1', amount: 100000, method: 'CASH' }),
+    }))
+    expect(tx.invoice.update).toHaveBeenCalledWith({ where: { id: 'invoice-1' }, data: { status: 'REFUNDED' } })
+    expect(tx.financeTransaction.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ type: 'EXPENSE', amount: 100000 }),
+    }))
+  })
+
+  it('hoàn một phần → set PARTIAL_REFUND', async () => {
+    prisma.invoice.findUnique.mockResolvedValue(paidInvoice())
+    await service.refund('invoice-1', { amount: 40000, reason: 'Món lỗi' })
+
+    expect(tx.invoice.update).toHaveBeenCalledWith({ where: { id: 'invoice-1' }, data: { status: 'PARTIAL_REFUND' } })
   })
 })

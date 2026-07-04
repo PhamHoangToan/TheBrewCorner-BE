@@ -1,6 +1,8 @@
 import { Controller, Get, Param, Patch, Query } from '@nestjs/common'
 import { TrashService } from './trash.service'
+import { Roles } from '../../common/auth/auth.decorators'
 
+@Roles('ADMIN')
 @Controller('trash')
 export class TrashController {
   constructor(private readonly trashService: TrashService) {}

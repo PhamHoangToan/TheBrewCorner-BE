@@ -40,9 +40,20 @@ export class OrdersController {
     return this.ordersService.create(body)
   }
 
+  @Post(':id/add-items')
+  addItems(@Param('id') id: string, @Body() body: { items?: Record<string, any>[] }) {
+    return this.ordersService.addItems(id, body.items ?? [])
+  }
+
+  // Khách tự gọi món tại bàn qua QR (public — không cần đăng nhập)
+  @Post('table/:tableId/self-order')
+  selfOrder(@Param('tableId') tableId: string, @Body() body: Record<string, any>) {
+    return this.ordersService.selfOrder(tableId, body)
+  }
+
   @Post(':id/split')
-  split(@Param('id') id: string, @Body() body: { itemIds?: string[] }) {
-    return this.ordersService.split(id, body.itemIds ?? [])
+  split(@Param('id') id: string, @Body() body: { itemIds?: string[]; tableId?: string }) {
+    return this.ordersService.split(id, body.itemIds ?? [], body.tableId)
   }
 
   @Post(':id/merge')

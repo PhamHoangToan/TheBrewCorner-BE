@@ -69,6 +69,8 @@ enum InvoiceStatus {
   UNPAID
   PAID
   VOID
+  REFUNDED
+  PARTIAL_REFUND
 }
 
 enum PaymentMethod {
@@ -136,6 +138,8 @@ model User {
   totalSpent            Decimal                       @default(0) @db.Decimal(12, 2)
   membershipTier        MembershipTier                @default(BASIC)
   birthday              DateTime?                     @db.Date
+  fcmTokens             String?                       @db.Text // JSON mảng token thiết bị (push mobile)
+  marketingOptIn        Boolean                       @default(true)
   deletedAt             DateTime?
   createdAt             DateTime                      @default(now())
   updatedAt             DateTime                      @updatedAt
@@ -155,8 +159,67 @@ model User {
   productReviews        ProductReview[]
   shiftChangeRequests   ShiftChangeRequest[]
   personalVouchers      PersonalVoucher[]
+  refundsMade           InvoiceRefund[]               @relation("RefundedBy")
+  cashSessions          CashSession[]                 @relation("CashSessionUser")
+  wallet                Wallet?
+  passwordResetTokens   PasswordResetToken[]
 
   @@map("users")
+}
+
+// Token đặt lại mật khẩu (quên mật khẩu) — gửi qua email, hết hạn 30 phút
+model PasswordResetToken {
+  id        String    @id @default(cuid()) @db.VarChar(36)
+  userId    String    @db.VarChar(36)
+  token     String    @unique @db.VarChar(64) // hash sha256 của token gửi qua email
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+// Ví trả trước của khách — nạp qua VietQR, thanh toán trừ ví
+model Wallet {
+  id           String              @id @default(cuid()) @db.VarChar(36)
+  userId       String              @unique @db.VarChar(36)
+  balance      Decimal             @default(0) @db.Decimal(12, 2)
+  updatedAt    DateTime            @updatedAt
+  user         User                @relation(fields: [userId], references: [id])
+  transactions WalletTransaction[]
+
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id        String   @id @default(cuid()) @db.VarChar(36)
+  walletId  String   @db.VarChar(36)
+  amount    Decimal  @db.Decimal(12, 2) // + nạp, - tiêu
+  type      String   @db.VarChar(20) // TOPUP | PAYMENT | REFUND
+  refId     String?  @db.VarChar(64) // orderId / pendingTransferCode
+  note      String?  @db.VarChar(255)
+  createdAt DateTime @default(now())
+  wallet    Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@index([walletId])
+  @@map("wallet_transactions")
+}
+
+// Chiến dịch marketing gửi hàng loạt (email / thông báo) theo phân khúc khách
+model Campaign {
+  id        String    @id @default(cuid()) @db.VarChar(36)
+  title     String    @db.VarChar(200)
+  content   String    @db.Text
+  channel   String    @db.VarChar(10) // EMAIL | PUSH | BOTH
+  segment   String    @db.VarChar(20) // ALL | GOLD | SILVER | INACTIVE_30D | BIRTHDAY_MONTH
+  status    String    @default("DRAFT") @db.VarChar(10) // DRAFT | SENT
+  sentAt    DateTime?
+  sentCount Int       @default(0)
+  createdAt DateTime  @default(now())
+
+  @@map("campaigns")
 }
 
 model LeaveRequest {
@@ -196,14 +259,14 @@ model AttendanceCorrectionRequest {
 }
 
 model Shift {
-  id          String            @id @default(cuid()) @db.VarChar(36)
-  code        String            @unique @db.VarChar(32)
-  name        String            @db.VarChar(80)
-  startTime   String            @db.VarChar(8)
-  endTime     String            @db.VarChar(8)
-  isActive    Boolean           @default(true)
-  deletedAt   DateTime?
-  assignments ShiftAssignment[]
+  id             String               @id @default(cuid()) @db.VarChar(36)
+  code           String               @unique @db.VarChar(32)
+  name           String               @db.VarChar(80)
+  startTime      String               @db.VarChar(8)
+  endTime        String               @db.VarChar(8)
+  isActive       Boolean              @default(true)
+  deletedAt      DateTime?
+  assignments    ShiftAssignment[]
   changeRequests ShiftChangeRequest[]
 
   @@map("shifts")
@@ -272,27 +335,27 @@ model Category {
 }
 
 model Product {
-  id         String           @id @default(cuid()) @db.VarChar(36)
-  code       String           @unique @db.VarChar(32)
-  name       String           @db.VarChar(160)
-  type       String           @db.VarChar(80)
-  unit       String           @db.VarChar(32)
-  price      Decimal          @db.Decimal(12, 2)
-  imageUrl   String?          @db.VarChar(255)
-  emoji      String?          @db.VarChar(16)
-  isActive   Boolean          @default(true)
+  id           String           @id @default(cuid()) @db.VarChar(36)
+  code         String           @unique @db.VarChar(32)
+  name         String           @db.VarChar(160)
+  type         String           @db.VarChar(80)
+  unit         String           @db.VarChar(32)
+  price        Decimal          @db.Decimal(12, 2)
+  imageUrl     String?          @db.VarChar(255)
+  emoji        String?          @db.VarChar(16)
+  isActive     Boolean          @default(true)
   // Món tạm hết trong ngày (86 list): set = cuối ngày hôm nay, tự hết hiệu lực khi qua ngày
   soldOutUntil DateTime?
-  deletedAt  DateTime?
-  categoryId String           @db.VarChar(36)
-  category   Category         @relation(fields: [categoryId], references: [id])
-  sizes      ProductSize[]
-  toppings   ProductTopping[]
-  recipes    ProductRecipe[]
-  orderItems OrderItem[]
-  reviews    ProductReview[]
-  createdAt  DateTime         @default(now())
-  updatedAt  DateTime         @updatedAt
+  deletedAt    DateTime?
+  categoryId   String           @db.VarChar(36)
+  category     Category         @relation(fields: [categoryId], references: [id])
+  sizes        ProductSize[]
+  toppings     ProductTopping[]
+  recipes      ProductRecipe[]
+  orderItems   OrderItem[]
+  reviews      ProductReview[]
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
 
   @@index([categoryId])
   @@map("products")
@@ -441,11 +504,47 @@ model Invoice {
   cashier        User?            @relation("InvoiceCashier", fields: [cashierId], references: [id])
   promotion      Promotion?       @relation(fields: [promotionId], references: [id])
   payments       InvoicePayment[]
+  refunds        InvoiceRefund[]
 
   @@index([cashierId])
   @@index([promotionId])
   @@index([status, paidAt])
   @@map("invoices")
+}
+
+model InvoiceRefund {
+  id           String        @id @default(cuid()) @db.VarChar(36)
+  invoiceId    String        @db.VarChar(36)
+  amount       Decimal       @db.Decimal(12, 2)
+  reason       String        @db.VarChar(255)
+  method       PaymentMethod @default(CASH)
+  refundedById String?       @db.VarChar(36)
+  createdAt    DateTime      @default(now())
+  invoice      Invoice       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  refundedBy   User?         @relation("RefundedBy", fields: [refundedById], references: [id])
+
+  @@index([invoiceId])
+  @@index([createdAt])
+  @@map("invoice_refunds")
+}
+
+// Ca quỹ tiền mặt của thu ngân: mở ca (tiền đầu) → đóng ca (đếm tiền thực, ghi chênh lệch).
+// expectedCash tính theo thời gian [openedAt, closedAt] — phù hợp mô hình 1 ngăn kéo/1 thu ngân.
+model CashSession {
+  id           String    @id @default(cuid()) @db.VarChar(36)
+  userId       String    @db.VarChar(36)
+  openingFloat Decimal   @default(0) @db.Decimal(12, 2)
+  openedAt     DateTime  @default(now())
+  closedAt     DateTime?
+  expectedCash Decimal?  @db.Decimal(12, 2)
+  countedCash  Decimal?  @db.Decimal(12, 2)
+  difference   Decimal?  @db.Decimal(12, 2)
+  note         String?   @db.VarChar(255)
+  status       String    @default("OPEN") @db.VarChar(10)
+  user         User      @relation("CashSessionUser", fields: [userId], references: [id])
+
+  @@index([userId, status])
+  @@map("cash_sessions")
 }
 
 model InvoicePayment {
@@ -554,7 +653,7 @@ model ProductReview {
 
 enum ShiftRequestType {
   REGISTER // đăng ký nhận ca trống
-  SWAP     // xin đổi/nhượng ca đã được phân
+  SWAP // xin đổi/nhượng ca đã được phân
 }
 
 // Yêu cầu đăng ký/đổi ca từ app Employee — admin duyệt trên FE nội bộ
@@ -580,18 +679,61 @@ model ShiftChangeRequest {
 
 // Nhà cung cấp nguyên vật liệu
 model Supplier {
-  id        String        @id @default(cuid()) @db.VarChar(36)
-  code      String        @unique @db.VarChar(32)
-  name      String        @db.VarChar(160)
-  phone     String?       @db.VarChar(20)
-  address   String?       @db.VarChar(255)
-  note      String?       @db.VarChar(255)
-  imports   StockImport[]
-  deletedAt DateTime?
-  createdAt DateTime      @default(now())
-  updatedAt DateTime      @updatedAt
+  id             String          @id @default(cuid()) @db.VarChar(36)
+  code           String          @unique @db.VarChar(32)
+  name           String          @db.VarChar(160)
+  phone          String?         @db.VarChar(20)
+  address        String?         @db.VarChar(255)
+  note           String?         @db.VarChar(255)
+  imports        StockImport[]
+  purchaseOrders PurchaseOrder[]
+  deletedAt      DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
   @@map("suppliers")
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  SENT
+  RECEIVED
+  CANCELLED
+}
+
+// Đơn đặt hàng nhà cung cấp (PO) — từ đề xuất nhập tự động (dựa forecast) → admin duyệt → nhận hàng tạo phiếu nhập
+model PurchaseOrder {
+  id            String              @id @default(cuid()) @db.VarChar(36)
+  code          String              @unique @db.VarChar(32)
+  supplierId    String?             @db.VarChar(36)
+  supplierName  String              @db.VarChar(160)
+  status        PurchaseOrderStatus @default(DRAFT)
+  note          String?             @db.VarChar(255)
+  createdById   String?             @db.VarChar(36)
+  receivedAt    DateTime?
+  stockImportId String?             @db.VarChar(36) // phiếu nhập sinh ra khi nhận hàng
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  supplier      Supplier?           @relation(fields: [supplierId], references: [id])
+  items         PurchaseOrderItem[]
+
+  @@index([supplierId])
+  @@index([status])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id              String        @id @default(cuid()) @db.VarChar(36)
+  purchaseOrderId String        @db.VarChar(36)
+  ingredientId    String?       @db.VarChar(36)
+  ingredientName  String        @db.VarChar(160)
+  quantity        Decimal       @db.Decimal(10, 2)
+  unit            String        @db.VarChar(32)
+  estPrice        Decimal       @default(0) @db.Decimal(12, 2)
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  @@index([purchaseOrderId])
+  @@map("purchase_order_items")
 }
 
 enum VoucherStatus {
@@ -631,11 +773,27 @@ model Ingredient {
   recipes       ProductRecipe[]
   importItems   StockImportItem[]
   exportItems   StockExportItem[]
+  batches       StockBatch[]
   deletedAt     DateTime?
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
 
   @@map("ingredients")
+}
+
+// Lô nguyên liệu theo hạn dùng — phục vụ cảnh báo HSD + xuất theo FEFO (hết hạn sớm dùng trước)
+model StockBatch {
+  id            String     @id @default(cuid()) @db.VarChar(36)
+  ingredientId  String     @db.VarChar(36)
+  stockImportId String?    @db.VarChar(36)
+  initialQty    Decimal    @db.Decimal(10, 2)
+  quantity      Decimal    @db.Decimal(10, 2) // số còn lại
+  expiryDate    DateTime   @db.Date
+  createdAt     DateTime   @default(now())
+  ingredient    Ingredient @relation(fields: [ingredientId], references: [id])
+
+  @@index([ingredientId, expiryDate])
+  @@map("stock_batches")
 }
 
 model StockImport {

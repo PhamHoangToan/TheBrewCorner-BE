@@ -20,6 +20,11 @@ export class IngredientsController {
     return this.ingredientsService.forecast()
   }
 
+  @Get('expiring')
+  expiring(@Query('days') days?: string) {
+    return this.ingredientsService.expiring(days ? Number(days) : 7)
+  }
+
   @Get('stock-imports/list')
   stockImports(@Query() query: Record<string, string | undefined>) {
     return this.ingredientsService.stockImports(query)

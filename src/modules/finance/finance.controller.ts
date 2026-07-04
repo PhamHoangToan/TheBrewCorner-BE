@@ -1,6 +1,8 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common'
 import { FinanceService } from './finance.service'
+import { Roles } from '../../common/auth/auth.decorators'
 
+@Roles('ADMIN', 'CASHIER')
 @Controller('finance-transactions')
 export class FinanceController {
   constructor(private readonly financeService: FinanceService) {}

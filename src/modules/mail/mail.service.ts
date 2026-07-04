@@ -55,6 +55,53 @@ export class MailService {
     return true
   }
 
+  // Gửi chung: Resend (chính) → SMTP (local) → log (dev). Không ném lỗi ra ngoài.
+  private async deliver(to: string, subject: string, html: string) {
+    try {
+      if (await this.sendViaResend(to, subject, html)) return
+    } catch (error) {
+      this.logger.error(`Resend thất bại cho ${to}: ${(error as Error).message}`)
+    }
+    const transporter = this.getTransporter()
+    if (!transporter) {
+      this.logger.log(`[DEV] Bỏ qua gửi email thật tới ${to} — ${subject}`)
+      return
+    }
+    try {
+      await transporter.sendMail({ from: process.env.MAIL_FROM ?? process.env.SMTP_USER, to, subject, html })
+    } catch (error) {
+      this.logger.error(`SMTP gửi thất bại cho ${to}: ${(error as Error).message}`)
+    }
+  }
+
+  async sendPasswordResetEmail(to: string, resetUrl: string, name?: string) {
+    const subject = 'Đặt lại mật khẩu — The Brew Corner'
+    const html = `
+      <div style="font-family: Arial, sans-serif; color: #2D1A0E;">
+        <h2 style="color: #662C21;">Xin chào ${name ?? ''},</h2>
+        <p>Bạn (hoặc ai đó) vừa yêu cầu đặt lại mật khẩu cho tài khoản tại <strong>The Brew Corner</strong>.</p>
+        <p>Nhấn nút bên dưới để đặt lại mật khẩu (liên kết hết hạn sau 30 phút):</p>
+        <p style="margin: 20px 0;">
+          <a href="${resetUrl}" style="background:#662C21;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;">Đặt lại mật khẩu</a>
+        </p>
+        <p style="color:#7a5040;font-size:13px;">Nếu nút không hoạt động, mở liên kết: <br/>${resetUrl}</p>
+        <p style="color:#aaa;font-size:12px;">Nếu bạn không yêu cầu, hãy bỏ qua email này.</p>
+      </div>
+    `
+    await this.deliver(to, subject, html)
+  }
+
+  async sendCampaignEmail(to: string, title: string, content: string) {
+    const html = `
+      <div style="font-family: Arial, sans-serif; color: #2D1A0E; max-width: 560px;">
+        <h2 style="color: #662C21;">${title}</h2>
+        <div style="white-space: pre-wrap; line-height: 1.6;">${content}</div>
+        <p style="color:#aaa;font-size:12px;margin-top:24px;">The Brew Corner — Cà phê & Trà</p>
+      </div>
+    `
+    await this.deliver(to, title, html)
+  }
+
   async sendStaffAccountEmail(to: string, data: { name: string; code: string; password: string }) {
     const subject = 'Tài khoản nhân viên The Brew Corner của bạn'
     const html = `

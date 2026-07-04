@@ -1,11 +1,13 @@
 import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common'
 import { PayrollService } from './payroll.service'
+import { Roles } from '../../common/auth/auth.decorators'
 
 @Controller('payroll')
 export class PayrollController {
   constructor(private readonly payrollService: PayrollService) {}
 
   // Admin trigger tính lương thủ công
+  @Roles('ADMIN')
   @Post('calculate')
   calculate(@Body() body: { year: number; month: number; userId?: string }) {
     if (body.userId) {
@@ -15,12 +17,14 @@ export class PayrollController {
   }
 
   // Cấu hình lương nhân viên
+  @Roles('ADMIN')
   @Patch('salary-config/:userId')
   setSalaryConfig(@Param('userId') userId: string, @Body() body: Record<string, any>) {
     return this.payrollService.setSalaryConfig(userId, body)
   }
 
   // Danh sách bảng lương (lọc theo tháng/năm)
+  @Roles('ADMIN')
   @Get()
   findAll(@Query() query: Record<string, string | undefined>) {
     return this.payrollService.findAll(query)
@@ -48,11 +52,13 @@ export class PayrollController {
     return this.payrollService.findOne(id)
   }
 
+  @Roles('ADMIN')
   @Patch(':id/approve')
   approve(@Param('id') id: string) {
     return this.payrollService.approve(id)
   }
 
+  @Roles('ADMIN')
   @Patch(':id/paid')
   markPaid(@Param('id') id: string) {
     return this.payrollService.markPaid(id)

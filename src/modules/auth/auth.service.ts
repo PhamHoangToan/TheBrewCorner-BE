@@ -1,6 +1,10 @@
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common'
+import { JwtService } from '@nestjs/jwt'
+import { createHash, randomBytes } from 'crypto'
 import { hashPassword, verifyPassword } from '../../common/password.util'
+import { PrismaService } from '../../prisma/prisma.service'
 import { UsersService } from '../users/users.service'
+import { MailService } from '../mail/mail.service'
 
 const roleToFe = {
   ADMIN: 'admin',
@@ -17,7 +21,49 @@ const WEB_INTERNAL_ALLOWED_CODES = ['NV001', 'NV002', 'NV003', 'NV004']
 
 @Injectable()
 export class AuthService {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly jwt: JwtService,
+    private readonly prisma: PrismaService,
+    private readonly mail: MailService,
+  ) {}
+
+  // Quên mật khẩu: luôn trả ok (không lộ email tồn tại hay không). Nếu có user → gửi link đặt lại.
+  async forgotPassword(email: string) {
+    const normalized = String(email ?? '').trim().toLowerCase()
+    if (!normalized) throw new BadRequestException('Vui lòng nhập email')
+
+    const user = await this.usersService.findForLogin(normalized)
+    if (user && user.email) {
+      const rawToken = randomBytes(32).toString('hex')
+      const tokenHash = createHash('sha256').update(rawToken).digest('hex')
+      const expiresAt = new Date(Date.now() + 30 * 60 * 1000)
+      await this.prisma.passwordResetToken.create({
+        data: { userId: user.id, token: tokenHash, expiresAt },
+      })
+      const base = process.env.APP_RESET_URL ?? 'http://localhost:5173/reset-password'
+      const resetUrl = `${base}?token=${rawToken}`
+      await this.mail.sendPasswordResetEmail(user.email, resetUrl, user.name)
+    }
+    return { ok: true }
+  }
+
+  async resetPassword(token: string, newPassword: string) {
+    if (!token) throw new BadRequestException('Thiếu token')
+    if (!newPassword || newPassword.length < 6) throw new BadRequestException('Mật khẩu phải có ít nhất 6 ký tự')
+
+    const tokenHash = createHash('sha256').update(String(token)).digest('hex')
+    const record = await this.prisma.passwordResetToken.findUnique({ where: { token: tokenHash } })
+    if (!record || record.usedAt || record.expiresAt < new Date()) {
+      throw new BadRequestException('Liên kết đặt lại mật khẩu không hợp lệ hoặc đã hết hạn')
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.user.update({ where: { id: record.userId }, data: { passwordHash: hashPassword(newPassword), mustChangePassword: false } }),
+      this.prisma.passwordResetToken.update({ where: { id: record.id }, data: { usedAt: new Date() } }),
+    ])
+    return { ok: true }
+  }
 
   async login(body: Record<string, any>, client?: string) {
     const identifier = body.email ?? body.username ?? body.code
@@ -88,8 +134,10 @@ export class AuthService {
     role: keyof typeof roleToFe
     mustChangePassword?: boolean
   }) {
+    // JWT thật: payload mang userId (sub), mã NV và role DB để RolesGuard phân quyền.
+    const token = this.jwt.sign({ sub: user.id, code: user.code, role: user.role })
     return {
-      token: `dev-token-${user.id}`,
+      token,
       user: {
         id: user.id,
         code: user.code,

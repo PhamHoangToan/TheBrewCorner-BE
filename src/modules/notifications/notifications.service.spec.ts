@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing'
 import { NotificationsService } from './notifications.service'
 import { NotificationsGateway } from './notifications.gateway'
 import { PrismaService } from '../../prisma/prisma.service'
+import { PushService } from '../push/push.service'
 
 const makeNotif = (overrides: Partial<any> = {}) => ({
   id: 'notif-1',
@@ -45,6 +46,10 @@ describe('NotificationsService', () => {
         {
           provide: NotificationsGateway,
           useValue: { server: { to: toMock } },
+        },
+        {
+          provide: PushService,
+          useValue: { sendToUser: jest.fn() },
         },
       ],
     }).compile()

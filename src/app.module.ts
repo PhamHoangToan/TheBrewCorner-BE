@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common'
-import { APP_INTERCEPTOR } from '@nestjs/core'
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core'
+import { JwtModule } from '@nestjs/jwt'
 import { PrismaModule } from './prisma/prisma.module'
 import { ActivityLogModule } from './modules/activity-log/activity-log.module'
 import { ActivityLogInterceptor } from './common/interceptors/activity-log.interceptor'
+import { RolesGuard } from './common/auth/roles.guard'
 import { AuthModule } from './modules/auth/auth.module'
 import { UploadModule } from './modules/upload/upload.module'
 import { AreasModule } from './modules/areas/areas.module'
@@ -32,11 +34,21 @@ import { ReservationsModule } from './modules/reservations/reservations.module'
 import { ReviewsModule } from './modules/reviews/reviews.module'
 import { SuppliersModule } from './modules/suppliers/suppliers.module'
 import { TrashModule } from './modules/trash/trash.module'
+import { CashSessionsModule } from './modules/cash-sessions/cash-sessions.module'
+import { PurchaseOrdersModule } from './modules/purchase-orders/purchase-orders.module'
+import { WalletModule } from './modules/wallet/wallet.module'
+import { CampaignsModule } from './modules/campaigns/campaigns.module'
+import { PushModule } from './modules/push/push.module'
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+    }),
+    JwtModule.register({
+      global: true,
+      secret: process.env.JWT_SECRET ?? 'brew-dev-secret-change-me',
+      signOptions: { expiresIn: process.env.JWT_EXPIRES ?? '30d' },
     }),
     ScheduleModule.forRoot(),
     PrismaModule,
@@ -68,7 +80,15 @@ import { TrashModule } from './modules/trash/trash.module'
     TrashModule,
     UsersModule,
     VouchersModule,
+    CashSessionsModule,
+    PurchaseOrdersModule,
+    WalletModule,
+    CampaignsModule,
+    PushModule,
   ],
-  providers: [{ provide: APP_INTERCEPTOR, useClass: ActivityLogInterceptor }],
+  providers: [
+    { provide: APP_GUARD, useClass: RolesGuard },
+    { provide: APP_INTERCEPTOR, useClass: ActivityLogInterceptor },
+  ],
 })
 export class AppModule {}

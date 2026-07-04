@@ -8,5 +8,6 @@ import { SuppliersModule } from '../suppliers/suppliers.module'
   imports: [JobsModule, SuppliersModule],
   controllers: [IngredientsController],
   providers: [IngredientsService],
+  exports: [IngredientsService],
 })
 export class IngredientsModule {}

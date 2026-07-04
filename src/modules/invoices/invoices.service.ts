@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { MembershipTier, PaymentMethod } from '@prisma/client'
 import { PrismaService } from '../../prisma/prisma.service'
 import { pagination, QueryParams } from '../../common/crud.types'
-import { POINTS_PER_VND, redeemLoyaltyPoints } from '../../common/loyalty.util'
+import { POINTS_PER_VND, redeemLoyaltyPoints, reverseLoyaltyForRefund } from '../../common/loyalty.util'
 import { NotificationsService } from '../notifications/notifications.service'
 const TIER_THRESHOLDS: Array<{ tier: MembershipTier; minSpent: number }> = [
   { tier: 'GOLD', minSpent: 10_000_000 },
@@ -26,7 +26,7 @@ export class InvoicesService {
         skip,
         take,
         orderBy: { issuedAt: 'desc' },
-        include: { order: { include: { table: true, items: true } }, cashier: true, promotion: true, payments: true },
+        include: { order: { include: { table: true, items: true } }, cashier: true, promotion: true, payments: true, refunds: true },
       }),
       this.prisma.invoice.count({ where }),
     ])
@@ -36,7 +36,7 @@ export class InvoicesService {
   async findOne(id: string) {
     const item = await this.prisma.invoice.findFirst({
       where: { id, deletedAt: null },
-      include: { order: { include: { table: true, items: true } }, cashier: true, promotion: true, payments: true },
+      include: { order: { include: { table: true, items: true } }, cashier: true, promotion: true, payments: true, refunds: true },
     })
     if (!item) throw new NotFoundException('Invoice not found')
     return item
@@ -189,6 +189,62 @@ export class InvoicesService {
 
   private tierFor(totalSpent: number): MembershipTier {
     return TIER_THRESHOLDS.find((t) => totalSpent >= t.minSpent)?.tier ?? 'BASIC'
+  }
+
+  // Hoàn tiền hóa đơn đã thanh toán (toàn phần hoặc một phần).
+  // Ghi InvoiceRefund + phiếu chi (FinanceTransaction EXPENSE). Hoàn toàn bộ → đảo ngược điểm loyalty.
+  async refund(id: string, body: Record<string, any>) {
+    const invoice = await this.prisma.invoice.findUnique({
+      where: { id },
+      include: { order: true, refunds: true },
+    })
+    if (!invoice) throw new NotFoundException('Invoice not found')
+    if (!['PAID', 'PARTIAL_REFUND'].includes(invoice.status)) {
+      throw new BadRequestException('Chỉ có thể hoàn tiền hóa đơn đã thanh toán')
+    }
+
+    const total = parseFloat(String(invoice.totalAmount))
+    const already = invoice.refunds.reduce((s, r) => s + parseFloat(String(r.amount)), 0)
+    const remaining = total - already
+    const amount = Math.round(Number(body.amount ?? remaining))
+    if (!(amount > 0)) throw new BadRequestException('Số tiền hoàn phải lớn hơn 0')
+    if (amount > remaining + 0.5) {
+      throw new BadRequestException(`Vượt quá số tiền còn có thể hoàn (còn ${remaining.toLocaleString('vi-VN')}đ)`)
+    }
+    const reason = String(body.reason ?? '').trim()
+    if (!reason) throw new BadRequestException('Cần nhập lý do hoàn tiền')
+    const method = this.method(body.method)
+    const isFull = already + amount >= total - 0.5
+
+    const refund = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.invoiceRefund.create({
+        data: { invoiceId: id, amount, reason, method, refundedById: body.refundedById ?? null },
+      })
+      await tx.invoice.update({
+        where: { id },
+        data: { status: isFull ? 'REFUNDED' : 'PARTIAL_REFUND' },
+      })
+      await tx.financeTransaction.create({
+        data: {
+          code: `PC-RF-${Date.now()}`,
+          type: 'EXPENSE',
+          content: `Hoàn tiền HD ${invoice.code}: ${reason}`.slice(0, 255),
+          amount,
+          createdById: body.refundedById ?? null,
+        },
+      })
+      return created
+    }, { timeout: 15000, maxWait: 10000 })
+
+    // Hoàn toàn bộ → đảo ngược điểm tích/đổi (idempotent, ngoài transaction chính)
+    if (isFull && invoice.order.customerId) {
+      await reverseLoyaltyForRefund(this.prisma, { orderId: invoice.orderId, refundAmount: total })
+    }
+
+    this.notifications.emitOrderUpdate(invoice.orderId, {
+      invoiceStatus: isFull ? 'REFUNDED' : 'PARTIAL_REFUND',
+    })
+    return { refund, invoice: await this.findOne(id) }
   }
 
   async remove(id: string) {
