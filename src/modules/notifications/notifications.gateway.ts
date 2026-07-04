@@ -42,4 +42,14 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   emitOrderUpdate(orderId: string, payload: unknown) {
     this.server.to(`order:${orderId}`).emit('order:updated', payload)
   }
+
+  // Chat hỗ trợ — cả khách (widget Customer) lẫn nhân viên (trang /support-chat) join theo threadId
+  @SubscribeMessage('join:chat')
+  handleJoinChat(@MessageBody() data: { threadId: string }, @ConnectedSocket() client: Socket) {
+    if (data?.threadId) client.join(`chat:${data.threadId}`)
+  }
+
+  emitChatMessage(threadId: string, payload: unknown) {
+    this.server.to(`chat:${threadId}`).emit('chat:message', payload)
+  }
 }

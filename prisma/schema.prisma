@@ -140,9 +140,15 @@ model User {
   birthday              DateTime?                     @db.Date
   fcmTokens             String?                       @db.Text // JSON mảng token thiết bị (push mobile)
   marketingOptIn        Boolean                       @default(true)
+  referralCode          String?                       @unique @db.VarChar(16) // mã giới thiệu riêng của user này
+  referredById          String?                       @db.VarChar(36) // ai đã giới thiệu user này
+  referralBonusGiven    Boolean                       @default(false) // đã phát thưởng cho lượt giới thiệu này chưa (idempotent)
   deletedAt             DateTime?
   createdAt             DateTime                      @default(now())
   updatedAt             DateTime                      @updatedAt
+  referredBy            User?                         @relation("Referrals", fields: [referredById], references: [id])
+  referrals             User[]                        @relation("Referrals")
+  chatThreads           ChatThread[]
   orders                Order[]                       @relation("OrderCreatedBy")
   customerOrders        Order[]                       @relation("OrderCustomer")
   invoices              Invoice[]                     @relation("InvoiceCashier")
@@ -476,6 +482,7 @@ model Promotion {
   conditionText   String          @db.VarChar(255)
   minOrderAmount  Decimal?        @db.Decimal(12, 2)
   discountPercent Int
+  imageUrl        String?         @db.VarChar(500) // ảnh banner cho trang tin tức/ưu đãi Customer
   startDate       DateTime        @db.Date
   endDate         DateTime        @db.Date
   status          PromotionStatus @default(ACTIVE)
@@ -635,15 +642,18 @@ model LoyaltyTransaction {
 
 // Đánh giá món của khách sau khi order đã thanh toán
 model ProductReview {
-  id        String   @id @default(cuid()) @db.VarChar(36)
-  productId String   @db.VarChar(36)
-  userId    String   @db.VarChar(36)
-  orderId   String   @db.VarChar(36)
+  id        String    @id @default(cuid()) @db.VarChar(36)
+  productId String    @db.VarChar(36)
+  userId    String    @db.VarChar(36)
+  orderId   String    @db.VarChar(36)
   rating    Int // 1-5 sao
-  comment   String?  @db.VarChar(500)
-  createdAt DateTime @default(now())
-  product   Product  @relation(fields: [productId], references: [id])
-  user      User     @relation(fields: [userId], references: [id])
+  comment   String?   @db.VarChar(500)
+  hidden    Boolean   @default(false) // admin ẩn review vi phạm/spam khỏi Menu công khai
+  reply     String?   @db.VarChar(500) // phản hồi của quán
+  repliedAt DateTime?
+  createdAt DateTime  @default(now())
+  product   Product   @relation(fields: [productId], references: [id])
+  user      User      @relation(fields: [userId], references: [id])
 
   // Mỗi khách chỉ đánh giá 1 lần cho 1 món trong 1 order
   @@unique([orderId, productId, userId])
@@ -990,4 +1000,34 @@ model ActivityLog {
   @@index([module])
   @@index([createdAt])
   @@map("activity_logs")
+}
+
+// Chat hỗ trợ khách hàng — 1 thread/phiên chat, khách (đăng nhập hoặc vãng lai) nhắn cho quán,
+// admin/cashier trả lời qua FE nội bộ (trang /support-chat).
+model ChatThread {
+  id            String        @id @default(cuid()) @db.VarChar(36)
+  customerId    String?       @db.VarChar(36) // null nếu khách vãng lai (guest)
+  guestName     String?       @db.VarChar(120)
+  status        String        @default("OPEN") @db.VarChar(10) // OPEN | CLOSED
+  lastMessageAt DateTime      @default(now())
+  createdAt     DateTime      @default(now())
+  customer      User?         @relation(fields: [customerId], references: [id])
+  messages      ChatMessage[]
+
+  @@index([status, lastMessageAt])
+  @@map("chat_threads")
+}
+
+model ChatMessage {
+  id         String     @id @default(cuid()) @db.VarChar(36)
+  threadId   String     @db.VarChar(36)
+  senderType String     @db.VarChar(10) // CUSTOMER | STAFF
+  senderId   String?    @db.VarChar(36) // userId nhân viên trả lời (null nếu senderType=CUSTOMER)
+  content    String     @db.Text
+  read       Boolean    @default(false)
+  createdAt  DateTime   @default(now())
+  thread     ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId])
+  @@map("chat_messages")
 }

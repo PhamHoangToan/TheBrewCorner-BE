@@ -18,6 +18,11 @@ export class UsersController {
     return this.usersService.loyalty(id)
   }
 
+  @Get(':id/referral')
+  referral(@Param('id') id: string) {
+    return this.usersService.referral(id)
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.usersService.findOne(id)

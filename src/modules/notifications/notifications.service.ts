@@ -29,6 +29,7 @@ export type NotifType =
   | 'CORRECTION_APPROVED'
   | 'CORRECTION_REJECTED'
   | 'PAYROLL_APPROVED'
+  | 'CHAT_NEW_MESSAGE'
 
 interface SendParams {
   role: NotifRole | NotifRole[]

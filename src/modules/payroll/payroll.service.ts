@@ -256,11 +256,19 @@ export class PayrollService {
   }
 
   async findByUser(userId: string) {
-    return this.prisma.payroll.findMany({
+    const payrolls = await this.prisma.payroll.findMany({
       where: { userId },
       orderBy: [{ periodYear: 'desc' }, { periodMonth: 'desc' }],
-      include: { user: { select: { id: true, code: true, name: true, role: true } } },
+      include: { user: { select: { id: true, code: true, name: true, role: true } }, days: true },
     })
+    // Tính sẵn tổng theo tháng để FE vẽ biểu đồ xu hướng nhiều tháng mà không cần gọi API N lần.
+    return payrolls.map((p) => ({
+      ...p,
+      totalLateMinutes: p.days.reduce((sum, d) => sum + d.lateMinutes, 0),
+      totalEarlyMinutes: p.days.reduce((sum, d) => sum + d.earlyMinutes, 0),
+      totalOtMinutes: p.days.reduce((sum, d) => sum + d.otMinutes, 0),
+      totalPenaltyAmount: p.days.reduce((sum, d) => sum + (parseFloat(String(d.penaltyAmount)) || 0), 0),
+    }))
   }
 
   async findOne(id: string) {

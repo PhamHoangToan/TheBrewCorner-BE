@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../prisma/prisma.service'
 import { NotificationsService } from '../notifications/notifications.service'
 
@@ -87,9 +87,22 @@ export class ReservationsService {
     return updated
   }
 
-  async cancel(id: string) {
+  // customerId có giá trị → khách tự hủy (thêm ràng buộc sở hữu/thời gian).
+  // Không truyền (admin/waiter hủy hộ qua FE nội bộ) → giữ hành vi cũ, không giới hạn.
+  async cancel(id: string, customerId?: string) {
     const reservation = await this.prisma.reservation.findUnique({ where: { id } })
     if (!reservation) throw new NotFoundException('Không tìm thấy yêu cầu đặt bàn')
+
+    if (customerId) {
+      if (reservation.customerId !== customerId) throw new ForbiddenException('Bạn không có quyền hủy đặt bàn này')
+      if (!['PENDING', 'CONFIRMED'].includes(reservation.status)) {
+        throw new BadRequestException('Chỉ hủy được yêu cầu đang chờ hoặc đã xác nhận')
+      }
+      const minutesLeft = (reservation.reservedTime.getTime() - Date.now()) / 60000
+      if (minutesLeft < 60) {
+        throw new BadRequestException('Chỉ hủy được trước giờ đến ít nhất 60 phút')
+      }
+    }
 
     const updated = await this.prisma.reservation.update({
       where: { id },

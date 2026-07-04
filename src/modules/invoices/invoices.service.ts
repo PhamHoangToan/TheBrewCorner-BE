@@ -3,6 +3,7 @@ import { MembershipTier, PaymentMethod } from '@prisma/client'
 import { PrismaService } from '../../prisma/prisma.service'
 import { pagination, QueryParams } from '../../common/crud.types'
 import { POINTS_PER_VND, redeemLoyaltyPoints, reverseLoyaltyForRefund } from '../../common/loyalty.util'
+import { grantReferralBonusIfEligible } from '../../common/referral.util'
 import { NotificationsService } from '../notifications/notifications.service'
 const TIER_THRESHOLDS: Array<{ tier: MembershipTier; minSpent: number }> = [
   { tier: 'GOLD', minSpent: 10_000_000 },
@@ -176,6 +177,8 @@ export class InvoicesService {
             await tx.user.update({ where: { id: user.id }, data: { membershipTier: tier } })
           }
         }
+
+        await grantReferralBonusIfEligible(tx, invoice.order.customerId)
       }
 
       return payment

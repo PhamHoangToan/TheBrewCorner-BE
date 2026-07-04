@@ -1,5 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common'
 import { PromotionsService } from './promotions.service'
+import { Public } from '../../common/auth/auth.decorators'
 
 @Controller('promotions')
 export class PromotionsController {
@@ -13,6 +14,13 @@ export class PromotionsController {
   @Get('valid')
   findValid(@Query('totalAmount') totalAmount?: string) {
     return this.promotionsService.findValid(Number(totalAmount ?? 0))
+  }
+
+  // Trang tin tức/ưu đãi (Customer) — public, không cần đăng nhập
+  @Public()
+  @Get('active')
+  findActive() {
+    return this.promotionsService.findActive()
   }
 
   @Post('validate')

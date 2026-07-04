@@ -5,6 +5,7 @@ import { hashPassword, verifyPassword } from '../../common/password.util'
 import { PrismaService } from '../../prisma/prisma.service'
 import { UsersService } from '../users/users.service'
 import { MailService } from '../mail/mail.service'
+import { generateReferralCode } from '../../common/referral.util'
 
 const roleToFe = {
   ADMIN: 'admin',
@@ -113,7 +114,22 @@ export class AuthService {
       status: 'active',
     })
 
-    return this.authResponse(user)
+    // Sinh mã giới thiệu riêng cho khách mới + ghi nhận ai đã giới thiệu (nếu có nhập mã hợp lệ).
+    // Không chặn đăng ký nếu mã giới thiệu sai/không tồn tại — chỉ bỏ qua.
+    const referralCode = await generateReferralCode(this.prisma)
+    const refCodeInput = String(body.referralCode ?? '').trim().toUpperCase()
+    let referredById: string | null = null
+    if (refCodeInput) {
+      const referrer = await this.prisma.user.findFirst({ where: { referralCode: refCodeInput } })
+      if (referrer && referrer.id !== user.id) referredById = referrer.id
+    }
+
+    const updated = await this.prisma.user.update({
+      where: { id: user.id },
+      data: { referralCode, referredById },
+    })
+
+    return this.authResponse(updated)
   }
 
   devMe() {

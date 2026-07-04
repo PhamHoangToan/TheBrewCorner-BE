@@ -15,9 +15,14 @@ describe('WalletService', () => {
           provide: PrismaService,
           useValue: {
             wallet: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn() },
-            walletTransaction: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn(), create: jest.fn() },
+            walletTransaction: {
+              findMany: jest.fn().mockResolvedValue([]),
+              count: jest.fn().mockResolvedValue(0),
+              findFirst: jest.fn(),
+              create: jest.fn(),
+            },
             pendingTransfer: { findUnique: jest.fn(), update: jest.fn() },
-            $transaction: jest.fn().mockResolvedValue([]),
+            $transaction: jest.fn().mockImplementation((ops) => Promise.all(ops)),
           },
         },
       ],

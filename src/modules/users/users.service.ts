@@ -4,6 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service'
 import { pagination, QueryParams } from '../../common/crud.types'
 import { generateRandomPassword, hashPassword, verifyPassword } from '../../common/password.util'
 import { MailService } from '../mail/mail.service'
+import { generateReferralCode } from '../../common/referral.util'
 
 const roleMap: Record<string, UserRole> = {
   admin: 'ADMIN',
@@ -85,6 +86,37 @@ export class UsersService {
       totalSpent: parseFloat(String(user.totalSpent)),
       membershipTier: user.membershipTier,
       transactions,
+    }
+  }
+
+  async referral(id: string) {
+    let user = await this.prisma.user.findUnique({
+      where: { id },
+      select: { id: true, referralCode: true },
+    })
+    if (!user) throw new NotFoundException('User not found')
+
+    // Sinh lười cho khách đăng ký trước khi có tính năng này (chưa có sẵn referralCode)
+    if (!user.referralCode) {
+      const referralCode = await generateReferralCode(this.prisma)
+      user = await this.prisma.user.update({
+        where: { id },
+        data: { referralCode },
+        select: { id: true, referralCode: true },
+      })
+    }
+
+    const [totalReferred, bonusTransactions] = await Promise.all([
+      this.prisma.user.count({ where: { referredById: id } }),
+      this.prisma.loyaltyTransaction.findMany({
+        where: { userId: id, type: 'ADJUST', description: { contains: 'giới thiệu' } },
+      }),
+    ])
+
+    return {
+      referralCode: user.referralCode,
+      totalReferred,
+      totalBonusEarned: bonusTransactions.reduce((sum, t) => sum + t.points, 0),
     }
   }
 

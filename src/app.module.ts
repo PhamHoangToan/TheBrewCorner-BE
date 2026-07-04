@@ -39,6 +39,7 @@ import { PurchaseOrdersModule } from './modules/purchase-orders/purchase-orders.
 import { WalletModule } from './modules/wallet/wallet.module'
 import { CampaignsModule } from './modules/campaigns/campaigns.module'
 import { PushModule } from './modules/push/push.module'
+import { ChatModule } from './modules/chat/chat.module'
 
 @Module({
   imports: [
@@ -85,6 +86,7 @@ import { PushModule } from './modules/push/push.module'
     WalletModule,
     CampaignsModule,
     PushModule,
+    ChatModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: RolesGuard },

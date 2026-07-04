@@ -66,6 +66,12 @@ export class OrdersController {
     return this.ordersService.update(id, body)
   }
 
+  // Khách tự hủy đơn của mình (chỉ khi còn SENT, chưa pha chế/thanh toán)
+  @Patch(':id/cancel-by-customer')
+  cancelByCustomer(@Param('id') id: string, @Body() body: { customerId?: string }) {
+    return this.ordersService.cancelByCustomer(id, String(body?.customerId ?? ''))
+  }
+
   @Patch(':id/items/:itemId')
   updateItem(@Param('itemId') itemId: string, @Body() body: Record<string, unknown>) {
     return this.ordersService.updateItem(itemId, body)

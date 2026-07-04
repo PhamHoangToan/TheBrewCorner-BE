@@ -26,4 +26,9 @@ export class CampaignsController {
   send(@Param('id') id: string) {
     return this.campaignsService.send(id)
   }
+
+  @Get(':id/stats')
+  stats(@Param('id') id: string) {
+    return this.campaignsService.stats(id)
+  }
 }

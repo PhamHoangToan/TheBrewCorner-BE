@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { OrderStatus, OrderType, Prisma } from '@prisma/client'
 import { PrismaService } from '../../prisma/prisma.service'
 import { pagination, QueryParams } from '../../common/crud.types'
@@ -465,6 +465,44 @@ export class OrdersService {
     }
 
     return order
+  }
+
+  // Khách tự hủy đơn của mình — CHỈ khi barista chưa bắt đầu pha chế (còn SENT) và
+  // chưa thanh toán. Không dùng chung với update() vì update() cho hủy cả đơn đã PAID
+  // (dành cho admin/cashier xử lý sự cố) mà không đảo ngược hóa đơn tương ứng.
+  async cancelByCustomer(id: string, customerId: string) {
+    const order = await this.prisma.order.findFirst({
+      where: { id, deletedAt: null },
+      include: { table: true, invoice: { select: { status: true } } },
+    })
+    if (!order) throw new NotFoundException('Không tìm thấy đơn hàng')
+    if (order.customerId !== customerId) throw new ForbiddenException('Bạn không có quyền hủy đơn này')
+    if (order.status !== 'SENT') {
+      throw new BadRequestException('Đơn đã được xử lý, không thể tự hủy — vui lòng liên hệ nhân viên')
+    }
+    if (order.invoice?.status === 'PAID') {
+      throw new BadRequestException('Đơn đã thanh toán, không thể tự hủy')
+    }
+
+    const updated = await this.prisma.order.update({
+      where: { id },
+      data: { status: 'CANCELLED' },
+      include: { items: true, table: true },
+    })
+
+    await refundRedeemedPoints(this.prisma, order.id)
+
+    const tableLabel = updated.table ? `Bàn ${updated.table.name}` : 'Mang về'
+    this.notifications.emitOrderUpdate(updated.id, { status: updated.status })
+    await this.notifications.send({
+      role: ['cashier', 'waiter'],
+      title: 'Khách tự hủy đơn',
+      body: `${tableLabel} — khách đã hủy đơn trước khi pha chế`,
+      type: 'ORDER_CANCELLED',
+      refId: updated.id,
+    })
+
+    return updated
   }
 
   async updateItem(itemId: string, body: Record<string, any>) {

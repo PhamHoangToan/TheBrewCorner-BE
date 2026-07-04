@@ -31,12 +31,13 @@ describe('InvoicesService — pay()', () => {
   beforeEach(async () => {
     tx = {
       invoicePayment: { create: jest.fn().mockResolvedValue({ id: 'payment-1' }) },
-      invoice: { update: jest.fn().mockResolvedValue({}) },
+      invoice: { update: jest.fn().mockResolvedValue({}), count: jest.fn().mockResolvedValue(0) },
       order: { update: jest.fn().mockResolvedValue({}) },
       orderItem: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
       cafeTable: { update: jest.fn().mockResolvedValue({}) },
       loyaltyTransaction: { create: jest.fn().mockResolvedValue({}) },
-      user: { update: jest.fn() },
+      // findUnique mặc định trả null → grantReferralBonusIfEligible() thoát sớm, không ảnh hưởng test tích điểm/hạng thành viên hiện có
+      user: { update: jest.fn(), findUnique: jest.fn().mockResolvedValue(null) },
       invoiceRefund: { create: jest.fn().mockResolvedValue({ id: 'refund-1' }) },
       financeTransaction: { create: jest.fn().mockResolvedValue({}) },
     }
@@ -225,6 +226,44 @@ describe('InvoicesService — pay()', () => {
       await service.pay('invoice-1', { method: 'CASH' })
 
       expect(tx.user.update).toHaveBeenCalledTimes(1)
+    })
+
+    it('thưởng điểm giới thiệu bạn bè khi đây là hóa đơn PAID đầu tiên của khách được giới thiệu', async () => {
+      const invoice = makeInvoice({
+        totalAmount: 5000, // dưới ngưỡng tích điểm thường, để tách riêng luồng referral
+        order: { id: 'order-1', tableId: null, customerId: 'cust-1', items: [] },
+      })
+      prisma.invoice.findUnique.mockResolvedValue(invoice)
+      tx.user.findUnique.mockResolvedValue({ id: 'cust-1', referredById: 'referrer-1', referralBonusGiven: false })
+      tx.invoice.count.mockResolvedValue(1)
+
+      await service.pay('invoice-1', { method: 'CASH' })
+
+      expect(tx.user.update).toHaveBeenCalledWith({
+        where: { id: 'cust-1' },
+        data: { loyaltyPoints: { increment: 50 }, referralBonusGiven: true },
+      })
+      expect(tx.user.update).toHaveBeenCalledWith({
+        where: { id: 'referrer-1' },
+        data: { loyaltyPoints: { increment: 50 } },
+      })
+      expect(tx.loyaltyTransaction.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ userId: 'cust-1', points: 50, type: 'ADJUST' }),
+      }))
+    })
+
+    it('không thưởng lại nếu referralBonusGiven đã true (idempotent)', async () => {
+      const invoice = makeInvoice({
+        totalAmount: 5000,
+        order: { id: 'order-1', tableId: null, customerId: 'cust-1', items: [] },
+      })
+      prisma.invoice.findUnique.mockResolvedValue(invoice)
+      tx.user.findUnique.mockResolvedValue({ id: 'cust-1', referredById: 'referrer-1', referralBonusGiven: true })
+
+      await service.pay('invoice-1', { method: 'CASH' })
+
+      expect(tx.invoice.count).not.toHaveBeenCalled()
+      expect(tx.user.update).not.toHaveBeenCalled()
     })
   })
 })

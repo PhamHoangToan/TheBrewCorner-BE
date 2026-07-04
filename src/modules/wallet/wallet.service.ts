@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common'
 import { PrismaService } from '../../prisma/prisma.service'
+import { pagination, QueryParams } from '../../common/crud.types'
 
 @Injectable()
 export class WalletService {
@@ -11,13 +12,20 @@ export class WalletService {
     return wallet
   }
 
-  async summary(userId: string) {
+  // query rỗng → giữ hành vi cũ (20 giao dịch gần nhất, dùng cho panel tóm tắt ở Profile).
+  // Truyền page/limit → dùng cho trang lịch sử đầy đủ.
+  async summary(userId: string, query: QueryParams = {}) {
     const wallet = await this.getOrCreate(userId)
-    const transactions = await this.prisma.walletTransaction.findMany({
-      where: { walletId: wallet.id },
-      orderBy: { createdAt: 'desc' },
-      take: 20,
-    })
+    const { skip, take, page, limit } = pagination({ limit: '20', ...query })
+    const [transactions, total] = await this.prisma.$transaction([
+      this.prisma.walletTransaction.findMany({
+        where: { walletId: wallet.id },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+      this.prisma.walletTransaction.count({ where: { walletId: wallet.id } }),
+    ])
     return {
       balance: parseFloat(String(wallet.balance)) || 0,
       transactions: transactions.map((t) => ({
@@ -27,6 +35,9 @@ export class WalletService {
         note: t.note,
         createdAt: t.createdAt,
       })),
+      total,
+      page,
+      limit,
     }
   }
 

@@ -46,6 +46,25 @@ export class PromotionsService {
     })
   }
 
+  // Danh sách khuyến mãi đang hiệu lực (bất kể đơn hàng bao nhiêu) — cho trang tin tức/ưu đãi Customer
+  async findActive() {
+    const now = new Date()
+    const todayStart = new Date(now)
+    todayStart.setHours(0, 0, 0, 0)
+    const todayEnd = new Date(now)
+    todayEnd.setHours(23, 59, 59, 999)
+
+    return this.prisma.promotion.findMany({
+      where: {
+        deletedAt: null,
+        status: 'ACTIVE',
+        startDate: { lte: todayEnd },
+        endDate: { gte: todayStart },
+      },
+      orderBy: [{ discountPercent: 'desc' }, { createdAt: 'desc' }],
+    })
+  }
+
   async validate(body: Record<string, any>) {
     const code = String(body.code ?? '').trim().toUpperCase()
     const totalAmount = Number(body.totalAmount ?? 0)
@@ -81,6 +100,7 @@ export class PromotionsService {
         conditionText: body.conditionText ?? body.condition ?? body.dieukien ?? '',
         minOrderAmount: money(body.minOrderAmount),
         discountPercent: Math.min(100, Math.max(0, Number(body.discountPercent ?? body.giampercent ?? 0))),
+        imageUrl: body.imageUrl ? String(body.imageUrl) : null,
         startDate: new Date(body.startDate ?? body.ngaybatdau ?? new Date()),
         endDate: new Date(body.endDate ?? body.ngayketthuc ?? new Date()),
         status: this.status(body.status ?? body.trangthai),
@@ -99,6 +119,7 @@ export class PromotionsService {
         discountPercent: body.discountPercent != null || body.giampercent != null
           ? Math.min(100, Math.max(0, Number(body.discountPercent ?? body.giampercent)))
           : undefined,
+        imageUrl: body.imageUrl !== undefined ? (body.imageUrl ? String(body.imageUrl) : null) : undefined,
         startDate: body.startDate || body.ngaybatdau ? new Date(body.startDate ?? body.ngaybatdau) : undefined,
         endDate: body.endDate || body.ngayketthuc ? new Date(body.endDate ?? body.ngayketthuc) : undefined,
         status: body.status || body.trangthai ? this.status(body.status ?? body.trangthai) : undefined,

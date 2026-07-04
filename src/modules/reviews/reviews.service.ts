@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../../prisma/prisma.service'
+import { pagination, QueryParams } from '../../common/crud.types'
 
 @Injectable()
 export class ReviewsService {
@@ -40,17 +41,18 @@ export class ReviewsService {
 
   async findByProduct(productId: string) {
     return this.prisma.productReview.findMany({
-      where: { productId },
+      where: { productId, hidden: false },
       orderBy: { createdAt: 'desc' },
       take: 50,
       include: { user: { select: { id: true, name: true } } },
     })
   }
 
-  // Điểm trung bình + số lượt đánh giá của tất cả sản phẩm (cho trang Menu)
+  // Điểm trung bình + số lượt đánh giá của tất cả sản phẩm (cho trang Menu) — bỏ review đã ẩn
   async summary() {
     const groups = await this.prisma.productReview.groupBy({
       by: ['productId'],
+      where: { hidden: false },
       _avg: { rating: true },
       _count: true,
     })
@@ -66,6 +68,47 @@ export class ReviewsService {
     return this.prisma.productReview.findMany({
       where: { orderId, ...(userId ? { userId } : {}) },
       select: { productId: true, rating: true, comment: true },
+    })
+  }
+
+  // ── Quản trị (ADMIN) ──────────────────────────────────────────────────────
+
+  async findAll(query: QueryParams & { rating?: string; productId?: string; hidden?: string }) {
+    const { skip, take, page, limit } = pagination(query)
+    const where: Record<string, any> = {}
+    if (query.productId) where.productId = query.productId
+    if (query.rating) where.rating = Number(query.rating)
+    if (query.hidden !== undefined) where.hidden = query.hidden === 'true'
+
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.productReview.findMany({
+        where,
+        skip,
+        take,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          product: { select: { id: true, name: true } },
+          user: { select: { id: true, name: true } },
+        },
+      }),
+      this.prisma.productReview.count({ where }),
+    ])
+    return { items, total, page, limit }
+  }
+
+  async setHidden(id: string, hidden: boolean) {
+    const review = await this.prisma.productReview.findUnique({ where: { id } })
+    if (!review) throw new NotFoundException('Không tìm thấy đánh giá')
+    return this.prisma.productReview.update({ where: { id }, data: { hidden } })
+  }
+
+  async reply(id: string, reply: string) {
+    const review = await this.prisma.productReview.findUnique({ where: { id } })
+    if (!review) throw new NotFoundException('Không tìm thấy đánh giá')
+    if (!reply.trim()) throw new BadRequestException('Nội dung phản hồi không được để trống')
+    return this.prisma.productReview.update({
+      where: { id },
+      data: { reply: reply.trim().slice(0, 500), repliedAt: new Date() },
     })
   }
 }

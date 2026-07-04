@@ -53,8 +53,9 @@ export class CampaignsService {
           await this.mail.sendCampaignEmail(user.email, campaign.title, campaign.content)
         }
         if (campaign.channel === 'PUSH' || campaign.channel === 'BOTH') {
+          // refId trỏ về campaign để tính được tỉ lệ đọc theo từng chiến dịch (xem stats()).
           await this.prisma.notification.create({
-            data: { role: 'customer', userId: user.id, title: campaign.title, body: campaign.content.slice(0, 255), type: 'MARKETING' },
+            data: { role: 'customer', userId: user.id, title: campaign.title, body: campaign.content.slice(0, 255), type: 'MARKETING', refId: campaign.id },
           })
           this.push.sendToUser(user.id, campaign.title, campaign.content.slice(0, 255), { type: 'MARKETING' }).catch(() => {})
         }
@@ -69,6 +70,36 @@ export class CampaignsService {
       data: { status: 'SENT', sentAt: new Date(), sentCount: sent },
     })
     return { sent, total: users.length }
+  }
+
+  // Tỉ lệ đọc chỉ đo được với kênh PUSH/BOTH (dựa vào Notification.refId gắn khi gửi).
+  // Kênh EMAIL không có tracking pixel nên không đo được mở/click.
+  async stats(id: string) {
+    const campaign = await this.prisma.campaign.findUnique({ where: { id } })
+    if (!campaign) throw new NotFoundException('Campaign not found')
+
+    if (campaign.channel === 'EMAIL') {
+      return { channel: campaign.channel, trackable: false, sent: campaign.sentCount, read: null, readRate: null }
+    }
+
+    const [sent, read] = await this.prisma.$transaction([
+      this.prisma.notification.count({ where: { refId: id, type: 'MARKETING' } }),
+      this.prisma.notification.count({ where: { refId: id, type: 'MARKETING', read: true } }),
+    ])
+
+    // Campaign gửi TRƯỚC khi Notification.refId được gắn: đã gửi thật (sentCount > 0)
+    // nhưng không có notification nào match → báo "không theo dõi được" thay vì 0/0 (0%).
+    if (sent === 0 && campaign.sentCount > 0) {
+      return { channel: campaign.channel, trackable: false, sent: campaign.sentCount, read: null, readRate: null }
+    }
+
+    return {
+      channel: campaign.channel,
+      trackable: true,
+      sent,
+      read,
+      readRate: sent > 0 ? read / sent : 0,
+    }
   }
 
   private async resolveRecipients(segment: string): Promise<Array<{ id: string; email: string | null }>> {
