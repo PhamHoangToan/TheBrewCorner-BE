@@ -19,7 +19,7 @@ describe('ShiftsService — đăng ký / nhượng ca (ShiftChangeRequest)', () 
           provide: PrismaService,
           useValue: {
             shift: { findFirst: jest.fn(), findUniqueOrThrow: jest.fn(), upsert: jest.fn() },
-            shiftAssignment: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
+            shiftAssignment: { findFirst: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn() },
             shiftChangeRequest: {
               findFirst: jest.fn(), create: jest.fn(), findMany: jest.fn(), count: jest.fn(),
               findUnique: jest.fn(), update: jest.fn(),
@@ -176,11 +176,12 @@ describe('ShiftsService — đăng ký / nhượng ca (ShiftChangeRequest)', () 
       await expect(service.approveRequest('req-1')).rejects.toThrow(BadRequestException)
     })
 
-    it('SWAP: soft-delete assignment cũ (targetAssignmentId) rồi set APPROVED', async () => {
+    it('SWAP: đánh dấu ABSENT + ghi chú "cần phân người thay" (không xóa mềm) rồi set APPROVED', async () => {
       prisma.shiftChangeRequest.findUnique.mockResolvedValue({
         id: 'req-1', status: 'PENDING', type: 'SWAP', userId: 'u1', shiftId: 's1',
         workDate: new Date('2099-01-01'), targetAssignmentId: 'sa-old',
       })
+      prisma.shiftAssignment.findUnique.mockResolvedValue({ id: 'sa-old', note: null })
       prisma.shiftAssignment.update.mockResolvedValue({})
       prisma.shiftChangeRequest.update.mockResolvedValue({
         id: 'req-1', type: 'SWAP', status: 'APPROVED',
@@ -191,7 +192,7 @@ describe('ShiftsService — đăng ký / nhượng ca (ShiftChangeRequest)', () 
 
       expect(prisma.shiftAssignment.update).toHaveBeenCalledWith({
         where: { id: 'sa-old' },
-        data: { deletedAt: expect.any(Date) },
+        data: { status: 'ABSENT', note: 'Đã nhượng ca — cần phân người thay' },
       })
       expect(prisma.shiftAssignment.create).not.toHaveBeenCalled()
     })

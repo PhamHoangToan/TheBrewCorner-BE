@@ -6,6 +6,7 @@ import { AttendanceService } from '../attendance/attendance.service'
 import { NotificationsService, NotifRole } from '../notifications/notifications.service'
 import { mentionsPaidLeave } from '../../common/leave-note.util'
 import { isFutureDate } from '../../common/date.util'
+import { SWAP_RELEASED_NOTE, mentionsShiftSwap } from '../../common/shift-swap-note.util'
 
 const ROLE_TO_NOTIF: Record<string, NotifRole> = {
   ADMIN: 'admin', CASHIER: 'cashier', BARISTA: 'barista', WAITER: 'waiter',
@@ -85,9 +86,14 @@ export class ShiftsService {
   }
 
   async updateAssignment(id: string, body: Record<string, any>) {
+    const current = await this.prisma.shiftAssignment.findUnique({ where: { id } })
     const userId = body.userId ?? (body.nhanVien ? await this.findUserId(body.nhanVien) : undefined)
     const shiftId = body.shiftId ?? (body.gioVao || body.gioRa ? await this.findOrCreateShift(body) : undefined)
-    const status = body.status ? this.shiftStatus(body.status) : undefined
+    // Phân người khác thay ca đã nhượng (SWAP) → xóa trạng thái/ghi chú cũ,
+    // tránh người mới thừa hưởng nhãn "vắng mặt / cần người thay" của người cũ.
+    const isReassign = !!(userId && current && userId !== current.userId)
+    const clearSwapMarker = isReassign && mentionsShiftSwap(current?.note)
+    const status = body.status ? this.shiftStatus(body.status) : (clearSwapMarker ? 'SCHEDULED' : undefined)
     return this.prisma.shiftAssignment.update({
       where: { id },
       data: {
@@ -95,7 +101,7 @@ export class ShiftsService {
         ...(shiftId ? { shiftId } : {}),
         ...(body.workDate ?? body.ngay ? { workDate: new Date(body.workDate ?? body.ngay) } : {}),
         ...(status ? { status } : {}),
-        note: body.note,
+        note: clearSwapMarker ? null : body.note,
       },
       include: { user: true, shift: true },
     })
@@ -278,10 +284,15 @@ export class ShiftsService {
         throw error
       }
     } else if (request.targetAssignmentId) {
-      // SWAP: nhượng lại ca — ẩn assignment cũ để admin phân người khác
+      // SWAP: đánh dấu ABSENT + ghi chú (không xóa mềm) để admin vẫn thấy trong danh sách
+      // và biết cần tạo assignment mới cho người thay ca.
+      const target = await this.prisma.shiftAssignment.findUnique({ where: { id: request.targetAssignmentId } })
       await this.prisma.shiftAssignment.update({
         where: { id: request.targetAssignmentId },
-        data: { deletedAt: new Date() },
+        data: {
+          status: 'ABSENT',
+          note: target?.note ? `${target.note} · ${SWAP_RELEASED_NOTE}` : SWAP_RELEASED_NOTE,
+        },
       })
     }
 
